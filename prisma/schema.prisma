@@ -1,0 +1,383 @@
+// Dropship Ops — data model
+// Multi-tenant: User -> Stores -> (Listings, Orders, SupplierAccounts)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Platform {
+  ETSY
+  EBAY
+  SHOPIFY
+  OTHER
+}
+
+enum Currency {
+  USD
+  GBP
+  EUR
+}
+
+enum ListingStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum OrderStatus {
+  NEW // created in our system, not yet purchased from supplier
+  PROCESSING // ordered from supplier (buying price + supplier tracking recorded)
+  SHIPPED // customer-facing tracking added
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum TrackingKind {
+  SUPPLIER // AliExpress / Cainiao leg
+  CUSTOMER // FedEx / USPS / UPS leg we give the buyer
+}
+
+enum ShipmentStatus {
+  PENDING
+  INFO_RECEIVED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  EXCEPTION
+  EXPIRED
+  UNKNOWN
+}
+
+enum FetchStatus {
+  OK
+  PARTIAL // some fields fetched, needs manual completion
+  FAILED // scraping blocked; fully manual
+}
+
+// ---------------------------------------------------------------------------
+// Auth / tenancy
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  stores    Store[]
+  settings  Setting?
+  auditLogs AuditLog[]
+}
+
+model Setting {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // JSON blob for user preferences (fx provider, default fees, notification prefs, etc.)
+  data      Json     @default("{}")
+  updatedAt DateTime @updatedAt
+}
+
+model Store {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  platform  Platform  @default(ETSY)
+  currency  Currency  @default(USD) // the currency this store sells in
+  // Default marketplace/payment fee percent applied in profit calc (e.g. 6.5 for Etsy)
+  feePercent Decimal  @default(0) @db.Decimal(5, 2)
+  notes     String?
+  archived  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  listings         Listing[]
+  orders           Order[]
+  supplierAccounts SupplierAccount[]
+
+  @@index([userId])
+}
+
+// Encrypted vault of supplier purchase accounts (e.g. AliExpress logins used to buy)
+model SupplierAccount {
+  id           String   @id @default(cuid())
+  storeId      String
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  label        String // friendly name shown in UI
+  emailEnc     String // AES-256-GCM encrypted email (never stored in plaintext)
+  emailMasked  String // e.g. "jo***@gmail.com" for display without decrypting
+  provider     String   @default("aliexpress")
+  archived     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  purchases SupplierPurchase[]
+
+  @@index([storeId])
+}
+
+// ---------------------------------------------------------------------------
+// Listings
+// ---------------------------------------------------------------------------
+
+model Listing {
+  id            String        @id @default(cuid())
+  storeId       String
+  store         Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  title         String
+  description   String?       @db.Text
+  supplierUrl   String? // AliExpress product URL
+  supplierName  String?       @default("AliExpress")
+  // Supplier (cost) price for the base product, in supplierCurrency
+  supplierPrice Decimal?      @db.Decimal(12, 2)
+  supplierCurrency Currency   @default(USD)
+  // Our listed selling price, in the store currency
+  listedPrice   Decimal?      @db.Decimal(12, 2)
+  status        ListingStatus @default(ACTIVE)
+  fetchStatus   FetchStatus   @default(FAILED) // how the import went
+  archived      Boolean       @default(false)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  images   ListingImage[]
+  variants ListingVariant[]
+  suppliers ListingSupplier[]
+  orderItems OrderItem[]
+
+  @@index([storeId])
+}
+
+model ListingImage {
+  id        String  @id @default(cuid())
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  url       String
+  position  Int     @default(0)
+  isPrimary Boolean @default(false)
+}
+
+model ListingVariant {
+  id            String   @id @default(cuid())
+  listingId     String
+  listing       Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  name          String // e.g. "Red / XL"
+  sku           String?
+  imageUrl      String?
+  // Supplier cost of this specific variant, in listing.supplierCurrency
+  supplierPrice Decimal? @db.Decimal(12, 2)
+  // Suggested selling price for this variant, in store currency (optional override)
+  listedPrice   Decimal? @db.Decimal(12, 2)
+  position      Int      @default(0)
+
+  orderItems OrderItem[]
+
+  @@index([listingId])
+}
+
+// A sourcing option for a listing: where/for-how-much the goods can be bought.
+// A listing can have several; the default mirrors the legacy Listing.supplier* fields.
+model ListingSupplier {
+  id         String   @id @default(cuid())
+  listingId  String
+  listing    Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  name       String   @default("AliExpress")
+  url        String?
+  unitPrice  Decimal? @db.Decimal(12, 2)
+  currency   Currency @default(USD)
+  shipDaysUS Int? // estimated delivery days to the USA
+  shipDaysUK Int? // estimated delivery days to the UK
+  notes      String?
+  isDefault  Boolean  @default(false)
+  position   Int      @default(0)
+  archived   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  purchases SupplierPurchase[]
+
+  @@index([listingId])
+}
+
+// ---------------------------------------------------------------------------
+// Orders
+// ---------------------------------------------------------------------------
+
+model Order {
+  id          String      @id @default(cuid())
+  storeId     String
+  store       Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orderNumber String // human-friendly, unique per store
+  status      OrderStatus @default(NEW)
+  currency    Currency // selling currency (defaults from store at creation)
+
+  // Customer details
+  customerName    String
+  customerEmail   String?
+  customerPhone   String?
+  shippingAddress String? @db.Text
+  shippingCity    String?
+  shippingState   String?
+  shippingZip     String?
+  shippingCountry String?
+
+  notes       String?   @db.Text
+  placedAt    DateTime  @default(now()) // when the buyer placed it
+  archived    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  items      OrderItem[]
+  purchases  SupplierPurchase[]
+  shipments  Shipment[]
+  events     OrderEvent[]
+
+  @@unique([storeId, orderNumber])
+  @@index([storeId])
+  @@index([status])
+}
+
+model OrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  listingId   String?
+  listing     Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  variantId   String?
+  variant     ListingVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  // Snapshot so history survives listing edits/deletes
+  title       String
+  variantName String?
+  quantity    Int      @default(1)
+  // Per-unit selling price in order.currency
+  sellingPrice Decimal @db.Decimal(12, 2)
+
+  @@index([orderId])
+}
+
+// Record of buying the goods from the supplier (AliExpress). One order may need several.
+model SupplierPurchase {
+  id                String   @id @default(cuid())
+  orderId           String
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  supplierAccountId String?
+  supplierAccount   SupplierAccount? @relation(fields: [supplierAccountId], references: [id], onDelete: SetNull)
+  // Which listing sourcing option this purchase used (for later transit-time learning).
+  listingSupplierId String?
+  listingSupplier   ListingSupplier? @relation(fields: [listingSupplierId], references: [id], onDelete: SetNull)
+
+  supplierOrderNo String? // AliExpress order number
+  // What we actually paid the supplier, in buyingCurrency
+  buyingPrice     Decimal  @db.Decimal(12, 2)
+  buyingCurrency  Currency @default(USD)
+  // FX snapshot: buyingPrice converted into the order's selling currency at purchase time
+  buyingPriceInOrderCurrency Decimal? @db.Decimal(12, 2)
+  fxRateUsed      Decimal? @db.Decimal(18, 8)
+
+  // Cainiao / supplier tracking number for this purchase
+  cainiaoTrackingNo String?
+  purchasedAt     DateTime @default(now())
+
+  @@index([orderId])
+}
+
+// ---------------------------------------------------------------------------
+// Tracking / shipments
+// ---------------------------------------------------------------------------
+
+model Shipment {
+  id             String         @id @default(cuid())
+  orderId        String
+  order          Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  kind           TrackingKind // SUPPLIER (cainiao) or CUSTOMER (fedex/usps/ups)
+  trackingNumber String
+  carrierCode    String? // "cainiao", "fedex", "usps", "ups", ...
+  carrierName    String?
+  status         ShipmentStatus @default(PENDING)
+  statusDetail   String? // raw latest status text from provider
+  estimatedDelivery DateTime?
+  delivered      Boolean        @default(false)
+  // Sync bookkeeping for the 6-hourly worker
+  lastSyncedAt   DateTime?
+  nextSyncAt     DateTime? // when the worker should next try; null = stop syncing
+  syncError      String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  events TrackingEvent[]
+
+  @@unique([orderId, kind, trackingNumber])
+  @@index([delivered, nextSyncAt])
+  @@index([orderId])
+}
+
+model TrackingEvent {
+  id          String   @id @default(cuid())
+  shipmentId  String
+  shipment    Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  time        DateTime
+  status      String
+  location    String?
+  description String   @db.Text
+  // Dedup key so repeated syncs don't duplicate events
+  hash        String
+
+  @@unique([shipmentId, hash])
+  @@index([shipmentId])
+}
+
+// Append-only timeline of what happened to an order (status changes, tracking added, etc.)
+model OrderEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  type      String // "STATUS_CHANGE" | "PURCHASE_ADDED" | "TRACKING_ADDED" | "NOTE" ...
+  message   String   @db.Text
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+}
+
+// ---------------------------------------------------------------------------
+// FX rate cache + audit
+// ---------------------------------------------------------------------------
+
+model FxRate {
+  id        String   @id @default(cuid())
+  base      Currency
+  quote     Currency
+  rate      Decimal  @db.Decimal(18, 8)
+  asOf      DateTime // date the rate is valid for
+  fetchedAt DateTime @default(now())
+
+  @@unique([base, quote, asOf])
+  @@index([base, quote])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  entity    String
+  entityId  String?
+  meta      Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity, entityId])
+}
