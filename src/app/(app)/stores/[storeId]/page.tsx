@@ -12,16 +12,17 @@ import { fmtDate } from "@/lib/utils";
 export const dynamic = "force-dynamic";
 
 const linkPrimary =
-  "inline-flex items-center justify-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-700";
+  "inline-flex items-center justify-center gap-1.5 rounded-lg bg-gradient-to-b from-brand-500 to-brand-600 px-4 py-2 text-sm font-medium text-white shadow-[0_1px_2px_rgba(15,23,42,0.08),inset_0_1px_0_rgba(255,255,255,0.2)] transition hover:from-brand-600 hover:to-brand-700";
 const linkSecondary =
-  "inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50";
+  "inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200/90 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900";
 
-export default async function StoreDashboardPage({ params }: { params: { storeId: string } }) {
+export default async function StoreDashboardPage({ params }: { params: Promise<{ storeId: string }> }) {
+  const { storeId: storeIdParam } = await params;
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const store = await assertStoreOwner(params.storeId, userId);
+  const store = await assertStoreOwner(storeIdParam, userId);
   const storeId = store.id;
 
   const [a, recent, openOrders, orderTotal, listingTotal] = await Promise.all([
@@ -62,27 +63,30 @@ export default async function StoreDashboardPage({ params }: { params: { storeId
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">{store.name}</h1>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">{store.name}</h1>
+            <Badge>{store.platform}</Badge>
+          </div>
           <p className="mt-1 text-sm text-slate-500">
-            {store.platform} · {store.currency} · Last 30 days
+            Performance snapshot · {store.currency} · Last 30 days
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2.5">
           <Link href={`${base}/listings`} className={linkSecondary}>
-            Listings
+            Listings ({listingTotal})
           </Link>
           <Link href={`${base}/orders`} className={linkSecondary}>
-            Orders
+            Orders ({orderTotal})
           </Link>
           <Link href={`${base}/analytics`} className={linkPrimary}>
-            Analytics
+            View Analytics →
           </Link>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <Stat label="Open orders" value={openOrders} sub="New, processing or shipped" />
         <Stat
           label="Parcels in transit"
@@ -97,18 +101,26 @@ export default async function StoreDashboardPage({ params }: { params: { storeId
           sub={`${a.totals.orderCount} order${a.totals.orderCount === 1 ? "" : "s"}`}
         />
         <Stat
+          label="Order Cost (30 days)"
+          value={formatMoney(a.totals.cost, cur)}
+          sub="Spent on suppliers"
+        />
+        <Stat
           label="Profit (30 days)"
           value={formatMoney(a.totals.profit, cur)}
-          sub={`${(a.totals.margin * 100).toFixed(1)}% margin`}
+          sub={`${(a.totals.margin * 100).toFixed(1)}% net margin`}
         />
       </div>
 
       <Card>
         <CardHeader className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-900">Recent orders</h2>
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Recent orders</h2>
+            <p className="text-xs text-slate-500">Latest customer orders placed in this store</p>
+          </div>
           {orderTotal > 0 && (
             <Link href={`${base}/orders`} className="text-sm font-medium text-brand-600 hover:text-brand-700">
-              View all
+              View all orders →
             </Link>
           )}
         </CardHeader>
@@ -122,7 +134,7 @@ export default async function StoreDashboardPage({ params }: { params: { storeId
                   : "Record your first order to start tracking profit and shipments."
               }
               action={
-                <div className="flex flex-wrap justify-center gap-2">
+                <div className="flex flex-wrap justify-center gap-2.5">
                   {listingTotal === 0 && (
                     <Link href={`${base}/listings/new`} className={linkPrimary}>
                       + Add listing
@@ -139,28 +151,28 @@ export default async function StoreDashboardPage({ params }: { params: { storeId
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
-                  <th className="px-5 py-3 font-medium">Order</th>
-                  <th className="px-5 py-3 font-medium">Customer</th>
-                  <th className="px-5 py-3 font-medium">Status</th>
-                  <th className="px-5 py-3 font-medium">Placed</th>
-                  <th className="px-5 py-3 text-right font-medium">Total</th>
+                <tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  <th className="px-6 py-3">Order</th>
+                  <th className="px-6 py-3">Customer</th>
+                  <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3">Placed</th>
+                  <th className="px-6 py-3 text-right">Total</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {recentOrders.map((o) => (
-                  <tr key={o.id} className="hover:bg-slate-50">
-                    <td className="px-5 py-3">
-                      <Link href={`${base}/orders/${o.id}`} className="font-medium text-brand-600 hover:text-brand-700">
+                  <tr key={o.id} className="transition hover:bg-slate-50/80">
+                    <td className="px-6 py-3.5">
+                      <Link href={`${base}/orders/${o.id}`} className="font-semibold text-brand-600 hover:text-brand-700">
                         {o.orderNumber}
                       </Link>
                     </td>
-                    <td className="px-5 py-3 text-slate-700">{o.customerName}</td>
-                    <td className="px-5 py-3">
+                    <td className="px-6 py-3.5 font-medium text-slate-800">{o.customerName}</td>
+                    <td className="px-6 py-3.5">
                       <Badge status={o.status} />
                     </td>
-                    <td className="px-5 py-3 text-slate-500">{fmtDate(o.placedAt)}</td>
-                    <td className="px-5 py-3 text-right font-medium text-slate-900">
+                    <td className="px-6 py-3.5 text-slate-500">{fmtDate(o.placedAt)}</td>
+                    <td className="px-6 py-3.5 text-right font-semibold tabular-nums text-slate-900">
                       {formatMoney(o.total, o.currency)}
                     </td>
                   </tr>

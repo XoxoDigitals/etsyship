@@ -36,19 +36,32 @@ function itemsSummary(items: OrderRow["items"]): string {
   return `${qty > 1 ? `${qty}× ` : ""}${label}${more}`;
 }
 
-function shipmentIndicator(o: OrderRow) {
-  if (!o._count.shipments) return <span className="text-xs text-slate-400">No tracking</span>;
-  const customer = o.shipments.filter((s) => s.kind === "CUSTOMER");
-  const pool = customer.length ? customer : o.shipments;
-  if (pool.some((s) => s.delivered || s.status === "DELIVERED")) return <Badge status="DELIVERED">Delivered</Badge>;
-  if (pool.some((s) => s.status === "OUT_FOR_DELIVERY")) return <Badge status="OUT_FOR_DELIVERY">Out for delivery</Badge>;
-  if (pool.some((s) => s.status === "IN_TRANSIT")) return <Badge status="IN_TRANSIT">In transit</Badge>;
-  if (pool.some((s) => s.status === "EXCEPTION")) return <Badge status="EXCEPTION">Exception</Badge>;
-  return (
-    <span className="text-xs text-slate-500">
-      {o._count.shipments} shipment{o._count.shipments === 1 ? "" : "s"}
-    </span>
-  );
+function shipmentStatusByKind(o: OrderRow, kind: "SUPPLIER" | "CUSTOMER") {
+  const pool = o.shipments.filter((s) => s.kind === kind);
+  if (!pool.length) return <span className="text-xs text-slate-400">No tracking</span>;
+
+  const priority = [
+    "DELIVERED",
+    "OUT_FOR_DELIVERY",
+    "IN_TRANSIT",
+    "INFO_RECEIVED",
+    "EXCEPTION",
+    "PENDING",
+    "EXPIRED",
+    "UNKNOWN",
+  ];
+
+  if (pool.some((s) => s.delivered)) {
+    return <Badge status="DELIVERED" />;
+  }
+
+  for (const st of priority) {
+    if (pool.some((s) => s.status === st)) {
+      return <Badge status={st} />;
+    }
+  }
+
+  return <Badge status={pool[0].status || "PENDING"} />;
 }
 
 export function OrdersClient({
@@ -150,43 +163,45 @@ export function OrdersClient({
         <Card className={loading ? "opacity-60" : undefined}>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="border-b border-slate-100 text-xs uppercase text-slate-500">
+              <thead className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 <tr>
-                  <th className="px-4 py-3">Order</th>
-                  <th className="px-4 py-3">Customer</th>
-                  <th className="px-4 py-3">Date</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Items</th>
-                  <th className="px-4 py-3 text-right">Revenue</th>
-                  <th className="px-4 py-3">Tracking</th>
+                  <th className="px-6 py-3">Order</th>
+                  <th className="px-6 py-3">Customer</th>
+                  <th className="px-6 py-3">Date</th>
+                  <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3">Items</th>
+                  <th className="px-6 py-3 text-right">Revenue</th>
+                  <th className="px-6 py-3">Supplier Tracking</th>
+                  <th className="px-6 py-3">Buyer Tracking</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {data.items.map((o) => (
-                  <tr key={o.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 font-medium">
-                      <Link href={`/stores/${storeId}/orders/${o.id}`} className="text-brand-700 hover:underline">
+                  <tr key={o.id} className="transition hover:bg-slate-50/80">
+                    <td className="px-6 py-3.5 font-semibold">
+                      <Link href={`/stores/${storeId}/orders/${o.id}`} className="text-brand-600 hover:text-brand-700 hover:underline">
                         {o.orderNumber}
                       </Link>
                     </td>
-                    <td className="px-4 py-3">{o.customerName}</td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-600">{fmtDate(o.placedAt)}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-6 py-3.5 font-medium text-slate-800">{o.customerName}</td>
+                    <td className="whitespace-nowrap px-6 py-3.5 text-slate-500">{fmtDate(o.placedAt)}</td>
+                    <td className="px-6 py-3.5">
                       <Badge status={o.status} />
                     </td>
-                    <td className="max-w-xs truncate px-4 py-3 text-slate-600" title={itemsSummary(o.items)}>
+                    <td className="max-w-xs truncate px-6 py-3.5 text-slate-600" title={itemsSummary(o.items)}>
                       {itemsSummary(o.items)}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right font-medium">
+                    <td className="whitespace-nowrap px-6 py-3.5 text-right font-semibold tabular-nums text-slate-900">
                       {formatMoney(o.revenue, (o.currency || storeCurrency) as "USD" | "GBP" | "EUR")}
                     </td>
-                    <td className="px-4 py-3">{shipmentIndicator(o)}</td>
+                    <td className="px-6 py-3.5">{shipmentStatusByKind(o, "SUPPLIER")}</td>
+                    <td className="px-6 py-3.5">{shipmentStatusByKind(o, "CUSTOMER")}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-sm text-slate-500">
+          <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/40 px-6 py-3 text-xs font-medium text-slate-500">
             <span>
               {data.total} order{data.total === 1 ? "" : "s"} · page {data.page} of {totalPages}
             </span>

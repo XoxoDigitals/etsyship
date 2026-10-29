@@ -9,10 +9,11 @@ import { syncShipment, deepLinkFor } from "@/lib/tracking";
 
 export const dynamic = "force-dynamic";
 
-export const POST = handle(async (req: Request, { params }: { params: { orderId: string } }) => {
+export const POST = handle(async (req: Request, { params }: { params: Promise<{ orderId: string }> }) => {
+  const { orderId } = await params;
   const userId = await requireUserId();
   const input = supplierPurchaseSchema.parse(await parseJson(req));
-  const order = await assertOrderOwner(params.orderId, userId);
+  const order = await assertOrderOwner(orderId, userId);
 
   if (input.supplierAccountId) {
     const acct = await prisma.supplierAccount.findUnique({

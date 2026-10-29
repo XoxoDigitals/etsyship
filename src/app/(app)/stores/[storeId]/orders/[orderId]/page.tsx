@@ -12,15 +12,16 @@ import { OrderDetail, type OrderDetailData, type SupplierGroup } from "@/compone
 
 export const dynamic = "force-dynamic";
 
-export default async function OrderPage({ params }: { params: { storeId: string; orderId: string } }) {
+export default async function OrderPage({ params }: { params: Promise<{ storeId: string; orderId: string }> }) {
+  const { storeId: storeIdParam, orderId: orderIdParam } = await params;
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const store = await assertStoreOwner(params.storeId, userId);
+  const store = await assertStoreOwner(storeIdParam, userId);
 
   const order = await prisma.order.findFirst({
-    where: { id: params.orderId, storeId: store.id },
+    where: { id: orderIdParam, storeId: store.id },
     include: {
       items: true,
       purchases: {

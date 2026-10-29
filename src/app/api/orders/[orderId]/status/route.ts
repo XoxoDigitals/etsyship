@@ -6,10 +6,11 @@ import { audit, orderEvent } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
-export const PATCH = handle(async (req: Request, { params }: { params: { orderId: string } }) => {
+export const PATCH = handle(async (req: Request, { params }: { params: Promise<{ orderId: string }> }) => {
+  const { orderId } = await params;
   const userId = await requireUserId();
   const { status } = orderStatusUpdateSchema.parse(await parseJson(req));
-  const order = await assertOrderOwner(params.orderId, userId);
+  const order = await assertOrderOwner(orderId, userId);
 
   const updated = await prisma.order.update({ where: { id: order.id }, data: { status } });
   await orderEvent(order.id, "STATUS_CHANGE", "Status → " + status, { from: order.status, to: status });

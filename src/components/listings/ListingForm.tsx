@@ -180,6 +180,8 @@ export function ListingForm({
 
   const [fetchingIdx, setFetchingIdx] = useState<number | null>(null);
   const [fetchMsg, setFetchMsg] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
+  const [showRawPaste, setShowRawPaste] = useState(false);
+  const [rawPasteHtml, setRawPasteHtml] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -188,10 +190,80 @@ export function ListingForm({
   const defSupplierCurrency = defaultSupplier?.currency ?? "USD";
   const sameCurrency = defSupplierCurrency === storeCurrency;
 
-  async function fetchFromUrl(idx: number) {
+  function applyFetchResult(r: FetchResult, idx: number) {
+    setFetchStatus(r.status);
+    if (r.status === "FAILED") {
+      setShowRawPaste(true);
+      setFetchMsg({
+        kind: "warn",
+        text: "AliExpress blocked automated request or hid dynamic pricing. Paste the page source (Ctrl+U) below to extract all variants & prices!",
+      });
+      return;
+    }
+    if (r.title) setTitle(r.title);
+    if (r.description) setDescription(r.description);
+    if (r.images?.length) setImages(r.images);
+
+    const fallbackVariantPrices = (r.variants ?? [])
+      .map((v) => v.price)
+      .filter((p): p is number => typeof p === "number" && p > 0);
+    const resolvedBasePrice =
+      r.price !== undefined
+        ? r.price
+        : fallbackVariantPrices.length > 0
+          ? Math.min(...fallbackVariantPrices)
+          : undefined;
+
+    // Fill this supplier row's price/currency.
+    setSuppliers((ss) =>
+      ss.map((s, i) =>
+        i === idx
+          ? {
+              ...s,
+              unitPrice: resolvedBasePrice !== undefined ? String(resolvedBasePrice) : s.unitPrice,
+              currency: r.currency ?? s.currency,
+            }
+          : s
+      )
+    );
+    if (r.variants?.length) {
+      setVariants(
+        r.variants.map((v) => ({
+          name: v.name,
+          sku: "",
+          imageUrl: v.imageUrl ?? "",
+          supplierPrice:
+            v.price !== undefined
+              ? String(v.price)
+              : resolvedBasePrice !== undefined
+                ? String(resolvedBasePrice)
+                : "",
+          listedPrice: "",
+        }))
+      );
+    }
+    const varCount = r.variants?.length ?? 0;
+    const pricedVars = (r.variants ?? []).filter((v) => v.price !== undefined).length;
+    setFetchMsg(
+      r.status === "OK"
+        ? {
+            kind: "ok",
+            text: `Fetched product details${resolvedBasePrice !== undefined ? ` ($${resolvedBasePrice})` : ""}${varCount ? ` and ${varCount} variant(s) (${pricedVars} with specific SKU prices)` : ""}. Review before saving.`,
+          }
+        : {
+            kind: "warn",
+            text: "Partial details fetched (AliExpress may have served a captcha to the server). Expand 'Paste Page Source' below if variants or prices are missing.",
+          }
+    );
+    if (r.status === "PARTIAL" && (!r.variants?.length || resolvedBasePrice === undefined)) {
+      setShowRawPaste(true);
+    }
+  }
+
+  async function fetchFromUrl(idx: number, rawHtmlOverride?: string) {
     setFetchMsg(null);
-    const url = suppliers[idx]?.url.trim();
-    if (!url) {
+    const url = suppliers[idx]?.url.trim() ?? "";
+    if (!url && !rawHtmlOverride?.trim()) {
       setFetchMsg({ kind: "error", text: "Enter a supplier URL on this row first." });
       return;
     }
@@ -200,7 +272,7 @@ export function ListingForm({
       const res = await fetch("/api/listings/fetch", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ storeId, url }),
+        body: JSON.stringify({ storeId, url, rawHtml: rawHtmlOverride || undefined }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) {
@@ -208,45 +280,11 @@ export function ListingForm({
         return;
       }
       const r = json.data as FetchResult;
-      setFetchStatus(r.status);
-      if (r.status === "FAILED") {
-        setFetchMsg({
-          kind: "warn",
-          text: "Couldn't fetch details — AliExpress often blocks automated requests. Manual entry is fine.",
-        });
-        return;
+      applyFetchResult(r, idx);
+      if (rawHtmlOverride && r.status !== "FAILED") {
+        setRawPasteHtml("");
+        setShowRawPaste(false);
       }
-      if (r.title) setTitle(r.title);
-      if (r.description) setDescription(r.description);
-      if (r.images?.length) setImages(r.images);
-      // Fill this supplier row's price/currency.
-      setSuppliers((ss) =>
-        ss.map((s, i) =>
-          i === idx
-            ? {
-                ...s,
-                unitPrice: r.price !== undefined ? String(r.price) : s.unitPrice,
-                currency: r.currency ?? s.currency,
-              }
-            : s
-        )
-      );
-      if (r.variants?.length) {
-        setVariants(
-          r.variants.map((v) => ({
-            name: v.name,
-            sku: "",
-            imageUrl: v.imageUrl ?? "",
-            supplierPrice: v.price !== undefined ? String(v.price) : "",
-            listedPrice: "",
-          }))
-        );
-      }
-      setFetchMsg(
-        r.status === "OK"
-          ? { kind: "ok", text: "Fetched details from the URL. Review them before saving." }
-          : { kind: "warn", text: "Only some details could be fetched (partial). Complete the rest manually." }
-      );
     } catch {
       setFetchMsg({ kind: "error", text: "Network error while fetching. You can enter the details manually." });
     } finally {
@@ -506,6 +544,49 @@ export function ListingForm({
               </div>
             </div>
           ))}
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+            <button
+              type="button"
+              onClick={() => setShowRawPaste((v) => !v)}
+              className="flex w-full items-center justify-between text-left text-xs font-medium text-slate-600 hover:text-slate-900"
+            >
+              <span>
+                {showRawPaste ? "▼" : "▶"} Captcha / Missing Variants? Paste AliExpress Page Source or JSON to extract 100% of variants &amp; prices
+              </span>
+              <span className="text-[11px] text-brand-600">{showRawPaste ? "Hide" : "Expand"}</span>
+            </button>
+            {showRawPaste && (
+              <div className="mt-3 space-y-2.5 border-t border-slate-200/80 pt-3">
+                <p className="text-xs text-slate-500">
+                  If AliExpress serves an anti-bot challenge to the server, open the product page in your browser, press{" "}
+                  <kbd className="rounded border border-slate-300 bg-white px-1.5 py-0.5 font-mono text-[11px]">Ctrl+U</kbd>{" "}
+                  (View Page Source), select all (<kbd className="rounded border border-slate-300 bg-white px-1.5 py-0.5 font-mono text-[11px]">Ctrl+A</kbd>), copy, and paste below:
+                </p>
+                <Textarea
+                  rows={4}
+                  value={rawPasteHtml}
+                  onChange={(e) => setRawPasteHtml(e.target.value)}
+                  placeholder="Paste full HTML source or window._d_c_.DCData / runParams JSON here…"
+                  className="font-mono text-xs"
+                />
+                <div className="flex justify-end gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={!rawPasteHtml.trim() || fetchingIdx !== null}
+                    onClick={() => {
+                      const targetIdx = suppliers.findIndex((s) => s.isDefault);
+                      fetchFromUrl(targetIdx >= 0 ? targetIdx : 0, rawPasteHtml);
+                    }}
+                  >
+                    {fetchingIdx !== null ? "Extracting…" : "Extract Variants & Prices"}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
         </CardBody>
       </Card>
 

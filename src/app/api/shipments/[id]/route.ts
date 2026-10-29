@@ -20,9 +20,10 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 // Manually set a shipment's status (for carriers with no live provider configured).
-export const PATCH = handle(async (req: Request, { params }: { params: { id: string } }) => {
+export const PATCH = handle(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
+  const { id } = await params;
   const userId = await requireUserId();
-  const existing = await prisma.shipment.findUnique({ where: { id: params.id } });
+  const existing = await prisma.shipment.findUnique({ where: { id } });
   if (!existing) return fail("Not found", 404);
   await assertOrderOwner(existing.orderId, userId);
 
@@ -108,9 +109,10 @@ export const PATCH = handle(async (req: Request, { params }: { params: { id: str
   });
 });
 
-export const DELETE = handle(async (_req: Request, { params }: { params: { id: string } }) => {
+export const DELETE = handle(async (_req: Request, { params }: { params: Promise<{ id: string }> }) => {
+  const { id } = await params;
   const userId = await requireUserId();
-  const shipment = await prisma.shipment.findUnique({ where: { id: params.id } });
+  const shipment = await prisma.shipment.findUnique({ where: { id } });
   if (!shipment) return fail("Not found", 404);
   await assertOrderOwner(shipment.orderId, userId);
 

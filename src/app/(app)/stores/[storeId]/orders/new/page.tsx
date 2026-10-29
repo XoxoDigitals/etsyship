@@ -9,12 +9,13 @@ export const dynamic = "force-dynamic";
 
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
-export default async function NewOrderPage({ params }: { params: { storeId: string } }) {
+export default async function NewOrderPage({ params }: { params: Promise<{ storeId: string }> }) {
+  const { storeId: storeIdParam } = await params;
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const store = await assertStoreOwner(params.storeId, userId);
+  const store = await assertStoreOwner(storeIdParam, userId);
 
   const rows = await prisma.listing.findMany({
     where: { storeId: store.id, status: "ACTIVE", archived: false },

@@ -8,7 +8,7 @@ import { mirrorDefaultSupplier } from "@/lib/listing-suppliers";
 
 export const dynamic = "force-dynamic";
 
-type Ctx = { params: { listingId: string } };
+type Ctx = { params: Promise<{ listingId: string }> };
 
 const num = (v: unknown) => (v === null || v === undefined ? null : money(v));
 
@@ -44,14 +44,16 @@ async function loadOwned(listingId: string, userId: string) {
 }
 
 export const GET = handle(async (_req: Request, { params }: Ctx) => {
+  const { listingId } = await params;
   const userId = await requireUserId();
-  const listing = await loadOwned(params.listingId, userId);
+  const listing = await loadOwned(listingId, userId);
   return ok(serialize(listing));
 });
 
 export const PATCH = handle(async (req: Request, { params }: Ctx) => {
+  const { listingId } = await params;
   const userId = await requireUserId();
-  const existing = await loadOwned(params.listingId, userId);
+  const existing = await loadOwned(listingId, userId);
   const body = await parseJson<Record<string, unknown>>(req);
   const input = listingSchema.partial().parse(body);
 
@@ -142,8 +144,9 @@ export const PATCH = handle(async (req: Request, { params }: Ctx) => {
 });
 
 export const DELETE = handle(async (_req: Request, { params }: Ctx) => {
+  const { listingId } = await params;
   const userId = await requireUserId();
-  const listing = await loadOwned(params.listingId, userId);
+  const listing = await loadOwned(listingId, userId);
   // Soft-archive to preserve order history references.
   await prisma.listing.update({
     where: { id: listing.id },

@@ -12,16 +12,17 @@ export const dynamic = "force-dynamic";
 export default async function EditListingPage({
   params,
 }: {
-  params: { storeId: string; listingId: string };
+  params: Promise<{ storeId: string; listingId: string }>;
 }) {
+  const { storeId: storeIdParam, listingId: listingIdParam } = await params;
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const store = await assertStoreOwner(params.storeId, userId);
+  const store = await assertStoreOwner(storeIdParam, userId);
 
   const listing = await prisma.listing.findUnique({
-    where: { id: params.listingId },
+    where: { id: listingIdParam },
     include: {
       images: { orderBy: { position: "asc" } },
       variants: { orderBy: { position: "asc" } },

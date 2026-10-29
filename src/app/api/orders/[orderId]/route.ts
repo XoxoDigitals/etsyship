@@ -8,14 +8,15 @@ import { deepLinkFor } from "@/lib/tracking";
 
 export const dynamic = "force-dynamic";
 
-type Ctx = { params: { orderId: string } };
+type Ctx = { params: Promise<{ orderId: string }> };
 
 export const GET = handle(async (_req: Request, { params }: Ctx) => {
+  const { orderId } = await params;
   const userId = await requireUserId();
-  await assertOrderOwner(params.orderId, userId);
+  await assertOrderOwner(orderId, userId);
 
   const order = await prisma.order.findUniqueOrThrow({
-    where: { id: params.orderId },
+    where: { id: orderId },
     include: {
       items: true,
       purchases: {
@@ -106,12 +107,13 @@ const patchSchema = orderSchema
   .partial();
 
 export const PATCH = handle(async (req: Request, { params }: Ctx) => {
+  const { orderId } = await params;
   const userId = await requireUserId();
-  await assertOrderOwner(params.orderId, userId);
+  await assertOrderOwner(orderId, userId);
   const input = patchSchema.parse(await parseJson(req));
 
   const updated = await prisma.order.update({
-    where: { id: params.orderId },
+    where: { id: orderId },
     data: {
       ...(input.customerName !== undefined && { customerName: input.customerName }),
       ...(input.customerEmail !== undefined && { customerEmail: input.customerEmail || null }),
@@ -134,9 +136,10 @@ export const PATCH = handle(async (req: Request, { params }: Ctx) => {
 });
 
 export const DELETE = handle(async (_req: Request, { params }: Ctx) => {
+  const { orderId } = await params;
   const userId = await requireUserId();
-  await assertOrderOwner(params.orderId, userId);
-  const order = await prisma.order.update({ where: { id: params.orderId }, data: { archived: true } });
+  await assertOrderOwner(orderId, userId);
+  const order = await prisma.order.update({ where: { id: orderId }, data: { archived: true } });
   await audit({ userId, action: "ARCHIVE", entity: "Order", entityId: order.id });
   return ok({ id: order.id, archived: true });
 });

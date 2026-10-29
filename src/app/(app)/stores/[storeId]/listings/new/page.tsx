@@ -7,12 +7,13 @@ import { ListingForm } from "@/components/listings/ListingForm";
 
 export const dynamic = "force-dynamic";
 
-export default async function NewListingPage({ params }: { params: { storeId: string } }) {
+export default async function NewListingPage({ params }: { params: Promise<{ storeId: string }> }) {
+  const { storeId: storeIdParam } = await params;
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) redirect("/login");
 
-  const store = await assertStoreOwner(params.storeId, userId);
+  const store = await assertStoreOwner(storeIdParam, userId);
 
   return (
     <div className="space-y-6">

@@ -5,11 +5,11 @@ import { fetchAliExpress } from "@/lib/aliexpress";
 
 export const dynamic = "force-dynamic";
 
-// Best-effort scrape of a supplier URL. Does NOT save anything.
+// Best-effort scrape of a supplier URL or pasted HTML/JSON. Does NOT save anything.
 export const POST = handle(async (req: Request) => {
   const userId = await requireUserId();
   const input = fetchListingSchema.parse(await parseJson(req));
   await assertStoreOwner(input.storeId, userId);
-  const result = await fetchAliExpress(input.url);
+  const result = await fetchAliExpress(input.url || "", input.rawHtml ?? undefined);
   return ok(result);
 });

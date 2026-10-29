@@ -171,16 +171,16 @@ export function SettingsClient({ stores }: { stores: StoreLite[] }) {
         <CardHeader>
           <h3 className="font-semibold text-slate-800">Live carrier tracking (FedEx / USPS / UPS)</h3>
           <p className="text-sm text-slate-500">
-            There is no keyless carrier API. Create a free account with a tracking aggregator — one key covers all
-            carriers — then paste the key here. Without it, customer parcels use the manual status control + a live
-            deep-link to the carrier.
+            Built-in keyless tracking is enabled by default for UPS, USPS, FedEx, and Cainiao — no API key required.
+            Optionally, you can connect AfterShip or TrackingMore below if you prefer to route lookups through an
+            external aggregator API.
           </p>
         </CardHeader>
         <CardBody>
           <form onSubmit={saveTracking} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="Provider">
               <Select value={trackingProvider} onChange={(e) => setTrackingProvider(e.target.value)}>
-                <option value="none">None (manual + deep-link)</option>
+                <option value="none">Built-in Keyless Tracker (UPS / USPS / FedEx / Cainiao)</option>
                 <option value="aftership">AfterShip (free tier)</option>
                 <option value="trackingmore">TrackingMore</option>
               </Select>

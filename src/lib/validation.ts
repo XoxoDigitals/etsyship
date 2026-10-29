@@ -16,11 +16,23 @@ export const trackingKindEnum = z.enum(["SUPPLIER", "CUSTOMER"]);
 const money = z.coerce.number().min(0).max(1_000_000);
 const optMoney = money.optional().nullable();
 
-// ---- Auth ----
+// ---- Auth & Users ----
 export const registerSchema = z.object({
   email: z.string().email().max(200),
   name: z.string().max(120).optional(),
   password: z.string().min(8, "At least 8 characters").max(200),
+});
+
+export const createUserSchema = z.object({
+  email: z.string().email().max(200),
+  name: z.string().max(120).optional().nullable(),
+  password: z.string().min(8, "At least 8 characters").max(200),
+});
+
+export const updateUserSchema = z.object({
+  email: z.string().email().max(200).optional(),
+  name: z.string().max(120).optional().nullable(),
+  password: z.string().min(8, "At least 8 characters").max(200).optional().or(z.literal("")),
 });
 
 export const loginSchema = z.object({
@@ -85,7 +97,8 @@ export const listingSchema = z.object({
 
 export const fetchListingSchema = z.object({
   storeId: z.string().min(1),
-  url: z.string().url().max(1000),
+  url: z.string().url().max(1000).optional().or(z.literal("")),
+  rawHtml: z.string().max(5_000_000).optional().nullable(),
 });
 
 // ---- Order ----

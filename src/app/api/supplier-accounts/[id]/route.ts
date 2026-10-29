@@ -5,10 +5,11 @@ import { audit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
-export const DELETE = handle(async (_req: Request, { params }: { params: { id: string } }) => {
+export const DELETE = handle(async (_req: Request, { params }: { params: Promise<{ id: string }> }) => {
+  const { id } = await params;
   const userId = await requireUserId();
   const account = await prisma.supplierAccount.findUnique({
-    where: { id: params.id },
+    where: { id },
     include: { store: { select: { userId: true } } },
   });
   // Uniform 404 whether the id is missing or belongs to another tenant (no existence oracle).
@@ -17,7 +18,7 @@ export const DELETE = handle(async (_req: Request, { params }: { params: { id: s
     err.status = 404;
     throw err;
   }
-  await prisma.supplierAccount.update({ where: { id: params.id }, data: { archived: true } });
-  await audit({ userId, action: "ARCHIVE", entity: "SupplierAccount", entityId: params.id });
-  return ok({ id: params.id, archived: true });
+  await prisma.supplierAccount.update({ where: { id }, data: { archived: true } });
+  await audit({ userId, action: "ARCHIVE", entity: "SupplierAccount", entityId: id });
+  return ok({ id, archived: true });
 });

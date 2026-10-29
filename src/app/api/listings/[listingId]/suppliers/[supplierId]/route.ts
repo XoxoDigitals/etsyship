@@ -7,25 +7,26 @@ import { assertListingOwner, serializeSupplier, mirrorDefaultSupplier } from "@/
 
 export const dynamic = "force-dynamic";
 
-type Params = { params: { listingId: string; supplierId: string } };
+type Params = { params: Promise<{ listingId: string; supplierId: string }> };
 
 export const PATCH = handle(async (req: Request, { params }: Params) => {
+  const { listingId, supplierId } = await params;
   const userId = await requireUserId();
-  await assertListingOwner(params.listingId, userId);
-  const existing = await prisma.listingSupplier.findUnique({ where: { id: params.supplierId } });
-  if (!existing || existing.listingId !== params.listingId) return fail("Not found", 404);
+  await assertListingOwner(listingId, userId);
+  const existing = await prisma.listingSupplier.findUnique({ where: { id: supplierId } });
+  if (!existing || existing.listingId !== listingId) return fail("Not found", 404);
 
   const input = listingSupplierSchema.partial().parse(await parseJson(req));
 
   if (input.isDefault) {
     await prisma.listingSupplier.updateMany({
-      where: { listingId: params.listingId },
+      where: { listingId },
       data: { isDefault: false },
     });
   }
 
   const updated = await prisma.listingSupplier.update({
-    where: { id: params.supplierId },
+    where: { id: supplierId },
     data: {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.url !== undefined ? { url: input.url?.trim() || null } : {}),
@@ -38,28 +39,29 @@ export const PATCH = handle(async (req: Request, { params }: Params) => {
     },
   });
 
-  await mirrorDefaultSupplier(params.listingId);
+  await mirrorDefaultSupplier(listingId);
   await audit({ userId, action: "UPDATE", entity: "ListingSupplier", entityId: updated.id });
   return ok({ supplier: serializeSupplier(updated) });
 });
 
 export const DELETE = handle(async (_req: Request, { params }: Params) => {
+  const { listingId, supplierId } = await params;
   const userId = await requireUserId();
-  await assertListingOwner(params.listingId, userId);
-  const existing = await prisma.listingSupplier.findUnique({ where: { id: params.supplierId } });
-  if (!existing || existing.listingId !== params.listingId) return fail("Not found", 404);
+  await assertListingOwner(listingId, userId);
+  const existing = await prisma.listingSupplier.findUnique({ where: { id: supplierId } });
+  if (!existing || existing.listingId !== listingId) return fail("Not found", 404);
 
-  await prisma.listingSupplier.delete({ where: { id: params.supplierId } });
+  await prisma.listingSupplier.delete({ where: { id: supplierId } });
 
   // If we removed the default, promote the next remaining supplier.
   if (existing.isDefault) {
     const next = await prisma.listingSupplier.findFirst({
-      where: { listingId: params.listingId, archived: false },
+      where: { listingId, archived: false },
       orderBy: { position: "asc" },
     });
     if (next) await prisma.listingSupplier.update({ where: { id: next.id }, data: { isDefault: true } });
   }
-  await mirrorDefaultSupplier(params.listingId);
-  await audit({ userId, action: "DELETE", entity: "ListingSupplier", entityId: params.supplierId });
-  return ok({ id: params.supplierId, deleted: true });
+  await mirrorDefaultSupplier(listingId);
+  await audit({ userId, action: "DELETE", entity: "ListingSupplier", entityId: supplierId });
+  return ok({ id: supplierId, deleted: true });
 });

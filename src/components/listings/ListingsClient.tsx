@@ -21,9 +21,9 @@ export type ListingRow = {
 type ListData = { items: ListingRow[]; total: number; page: number; pageSize: number };
 
 const STATUS_STYLES: Record<string, string> = {
-  ACTIVE: "bg-green-100 text-green-800",
-  DRAFT: "bg-slate-100 text-slate-700",
-  ARCHIVED: "bg-gray-200 text-gray-700",
+  ACTIVE: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20",
+  DRAFT: "bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-500/15",
+  ARCHIVED: "bg-slate-100 text-slate-500 ring-1 ring-inset ring-slate-500/15",
 };
 
 export function ListingsClient({
@@ -143,15 +143,15 @@ export function ListingsClient({
         <Card className={loading ? "opacity-70" : undefined}>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="border-b border-slate-100 text-xs uppercase text-slate-500">
+              <thead className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 <tr>
-                  <th className="px-4 py-3">Listing</th>
-                  <th className="px-4 py-3">Supplier price</th>
-                  <th className="px-4 py-3">Listed price</th>
-                  <th className="px-4 py-3">Margin</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Variants</th>
-                  <th className="px-4 py-3" />
+                  <th className="px-6 py-3">Listing</th>
+                  <th className="px-6 py-3">Supplier price</th>
+                  <th className="px-6 py-3">Listed price</th>
+                  <th className="px-6 py-3">Margin</th>
+                  <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3">Variants</th>
+                  <th className="px-6 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -159,49 +159,45 @@ export function ListingsClient({
                   const primary = l.images.find((i) => i.isPrimary) ?? l.images[0];
                   const href = `/stores/${storeId}/listings/${l.id}/edit`;
                   return (
-                    <tr key={l.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-3">
-                        <Link href={href} className="flex items-center gap-3">
+                    <tr key={l.id} className="transition hover:bg-slate-50/80">
+                      <td className="px-6 py-3.5">
+                        <Link href={href} className="group flex items-center gap-3.5">
                           {primary ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
                               src={primary.url}
                               alt=""
-                              className="h-12 w-12 rounded-lg border border-slate-200 object-cover"
+                              className="h-11 w-11 rounded-lg border border-slate-200/80 object-cover shadow-sm"
                               referrerPolicy="no-referrer"
                             />
                           ) : (
-                            <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-dashed border-slate-300 text-xs text-slate-400">
+                            <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-[11px] text-slate-400">
                               none
                             </div>
                           )}
-                          <span className="line-clamp-2 max-w-xs font-medium text-slate-800">{l.title}</span>
+                          <span className="line-clamp-2 max-w-xs font-semibold text-slate-800 transition group-hover:text-brand-600">
+                            {l.title}
+                          </span>
                         </Link>
                       </td>
-                      <td className="px-4 py-3 text-slate-700">
+                      <td className="px-6 py-3.5 tabular-nums text-slate-600">
                         {l.supplierPrice === null ? "—" : formatMoney(l.supplierPrice, l.supplierCurrency)}
                       </td>
-                      <td className="px-4 py-3 text-slate-700">
+                      <td className="px-6 py-3.5 font-medium tabular-nums text-slate-900">
                         {l.listedPrice === null ? "—" : formatMoney(l.listedPrice, storeCurrency)}
                       </td>
-                      <td className="px-4 py-3 text-slate-700">{margin(l)}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                            STATUS_STYLES[l.status] ?? "bg-slate-100 text-slate-700"
-                          }`}
-                        >
-                          {l.status}
-                        </span>
+                      <td className="px-6 py-3.5 font-medium tabular-nums text-emerald-700">{margin(l)}</td>
+                      <td className="px-6 py-3.5">
+                        <Badge status={l.status} />
                       </td>
-                      <td className="px-4 py-3 text-slate-700">
+                      <td className="px-6 py-3.5 text-slate-700">
                         {l._count.variants > 0 ? <Badge>{l._count.variants}</Badge> : "—"}
                       </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex justify-end gap-2">
+                      <td className="px-6 py-3.5 text-right">
+                        <div className="flex justify-end gap-1.5">
                           <Link
                             href={href}
-                            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
                           >
                             Edit
                           </Link>

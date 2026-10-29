@@ -956,7 +956,7 @@ function ShipmentCard({
           ))}
         </Select>
         {busy === "status" && <span className="text-xs text-slate-400">saving…</span>}
-        <span className="ml-auto text-xs text-slate-400">manual · no API needed</span>
+        <span className="ml-auto text-xs text-slate-400">keyless UPS / USPS / FedEx / Cainiao sync + manual override</span>
       </div>
 
       {open && (

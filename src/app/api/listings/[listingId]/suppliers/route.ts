@@ -7,35 +7,37 @@ import { assertListingOwner, serializeSupplier, mirrorDefaultSupplier } from "@/
 
 export const dynamic = "force-dynamic";
 
-export const GET = handle(async (_req: Request, { params }: { params: { listingId: string } }) => {
+export const GET = handle(async (_req: Request, { params }: { params: Promise<{ listingId: string }> }) => {
+  const { listingId } = await params;
   const userId = await requireUserId();
-  await assertListingOwner(params.listingId, userId);
+  await assertListingOwner(listingId, userId);
   const rows = await prisma.listingSupplier.findMany({
-    where: { listingId: params.listingId, archived: false },
+    where: { listingId, archived: false },
     orderBy: [{ isDefault: "desc" }, { position: "asc" }],
   });
   return ok({ suppliers: rows.map(serializeSupplier) });
 });
 
-export const POST = handle(async (req: Request, { params }: { params: { listingId: string } }) => {
+export const POST = handle(async (req: Request, { params }: { params: Promise<{ listingId: string }> }) => {
+  const { listingId } = await params;
   const userId = await requireUserId();
-  await assertListingOwner(params.listingId, userId);
+  await assertListingOwner(listingId, userId);
   const input = listingSupplierSchema.parse(await parseJson(req));
 
   const count = await prisma.listingSupplier.count({
-    where: { listingId: params.listingId, archived: false },
+    where: { listingId, archived: false },
   });
   const makeDefault = Boolean(input.isDefault) || count === 0;
   if (makeDefault) {
     await prisma.listingSupplier.updateMany({
-      where: { listingId: params.listingId },
+      where: { listingId },
       data: { isDefault: false },
     });
   }
 
   const created = await prisma.listingSupplier.create({
     data: {
-      listingId: params.listingId,
+      listingId,
       name: input.name,
       url: input.url?.trim() || null,
       unitPrice: input.unitPrice ?? null,
@@ -48,13 +50,13 @@ export const POST = handle(async (req: Request, { params }: { params: { listingI
     },
   });
 
-  if (makeDefault) await mirrorDefaultSupplier(params.listingId);
+  if (makeDefault) await mirrorDefaultSupplier(listingId);
   await audit({
     userId,
     action: "CREATE",
     entity: "ListingSupplier",
     entityId: created.id,
-    meta: { listingId: params.listingId },
+    meta: { listingId },
   });
   return ok({ supplier: serializeSupplier(created) }, { status: 201 });
 });

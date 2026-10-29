@@ -6,18 +6,20 @@ import { audit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
-export const GET = handle(async (_req: Request, { params }: { params: { storeId: string } }) => {
+export const GET = handle(async (_req: Request, { params }: { params: Promise<{ storeId: string }> }) => {
+  const { storeId } = await params;
   const userId = await requireUserId();
-  const store = await assertStoreOwner(params.storeId, userId);
+  const store = await assertStoreOwner(storeId, userId);
   return ok(store);
 });
 
-export const PATCH = handle(async (req: Request, { params }: { params: { storeId: string } }) => {
+export const PATCH = handle(async (req: Request, { params }: { params: Promise<{ storeId: string }> }) => {
+  const { storeId } = await params;
   const userId = await requireUserId();
-  await assertStoreOwner(params.storeId, userId);
+  await assertStoreOwner(storeId, userId);
   const input = storeSchema.partial().parse(await parseJson(req));
   const store = await prisma.store.update({
-    where: { id: params.storeId },
+    where: { id: storeId },
     data: {
       ...(input.name !== undefined && { name: input.name }),
       ...(input.platform !== undefined && { platform: input.platform }),
@@ -30,11 +32,12 @@ export const PATCH = handle(async (req: Request, { params }: { params: { storeId
   return ok(store);
 });
 
-export const DELETE = handle(async (_req: Request, { params }: { params: { storeId: string } }) => {
+export const DELETE = handle(async (_req: Request, { params }: { params: Promise<{ storeId: string }> }) => {
+  const { storeId } = await params;
   const userId = await requireUserId();
-  await assertStoreOwner(params.storeId, userId);
+  await assertStoreOwner(storeId, userId);
   // Soft-delete (archive) to preserve order history.
-  const store = await prisma.store.update({ where: { id: params.storeId }, data: { archived: true } });
+  const store = await prisma.store.update({ where: { id: storeId }, data: { archived: true } });
   await audit({ userId, action: "ARCHIVE", entity: "Store", entityId: store.id });
   return ok({ id: store.id, archived: true });
 });
