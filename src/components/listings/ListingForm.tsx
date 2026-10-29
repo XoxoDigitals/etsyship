@@ -649,16 +649,16 @@ export function ListingForm({
                   src={url}
                   alt=""
                   className="h-12 w-12 shrink-0 rounded-lg border border-slate-200 object-cover"
-                  referrerPolicy="no-referrer"
+                  referrerPolicy={url.startsWith("http") ? "no-referrer" : undefined}
                 />
               ) : (
                 <div className="h-12 w-12 shrink-0 rounded-lg border border-dashed border-slate-300" />
               )}
               <Input
-                type="url"
+                type="text"
                 value={url}
                 onChange={(e) => setImages((imgs) => imgs.map((u, idx) => (idx === i ? e.target.value : u)))}
-                placeholder="https://…/image.jpg"
+                placeholder="https://…/image.jpg or upload →"
               />
               {i === 0 && <span className="shrink-0 text-xs font-medium text-brand-600">Primary</span>}
               <UploadButton upload={uploadFile} onUploaded={(u) => setImages((imgs) => imgs.map((x, idx) => (idx === i ? u : x)))} />
@@ -738,13 +738,13 @@ export function ListingForm({
                     src={v.imageUrl}
                     alt=""
                     className="h-10 w-10 shrink-0 rounded-lg border border-slate-200 object-cover"
-                    referrerPolicy="no-referrer"
+                    referrerPolicy={v.imageUrl.startsWith("http") ? "no-referrer" : undefined}
                   />
                 ) : (
                   <div className="h-10 w-10 shrink-0 rounded-lg border border-dashed border-slate-300" />
                 )}
                 <Input
-                  type="url"
+                  type="text"
                   value={v.imageUrl}
                   onChange={(e) => updateVariant(i, { imageUrl: e.target.value })}
                   placeholder="Variant image URL, or upload →"

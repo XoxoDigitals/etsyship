@@ -32,6 +32,6 @@ export const config = {
      *  - /api/auth/* (NextAuth), /api/register, /api/cron/* (secured by its own token)
      *  - _next static assets, favicon, images
      */
-    "/((?!login|register|api/auth|api/register|api/cron|_next/static|_next/image|favicon.ico).*)",
+    "/((?!login|register|uploads|api/auth|api/register|api/cron|_next/static|_next/image|favicon.ico).*)",
   ],
 };

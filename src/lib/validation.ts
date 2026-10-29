@@ -58,11 +58,19 @@ export const supplierAccountSchema = z.object({
 });
 
 // ---- Listing ----
+const imageUrlSchema = z
+  .string()
+  .max(1000)
+  .refine(
+    (v) => /^\/uploads\/[a-zA-Z0-9._-]+$/.test(v) || /^https?:\/\/.+/i.test(v),
+    "Invalid image URL",
+  );
+
 export const listingVariantSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1).max(200),
   sku: z.string().max(120).optional().nullable(),
-  imageUrl: z.string().url().max(1000).optional().nullable(),
+  imageUrl: imageUrlSchema.optional().nullable().or(z.literal("")),
   supplierPrice: optMoney,
   listedPrice: optMoney,
 });
@@ -90,7 +98,7 @@ export const listingSchema = z.object({
   supplierCurrency: currencyEnum.default("USD"),
   listedPrice: optMoney,
   status: listingStatusEnum.default("ACTIVE"),
-  images: z.array(z.string().url().max(1000)).max(20).default([]),
+  images: z.array(imageUrlSchema).max(20).default([]),
   variants: z.array(listingVariantSchema).max(100).default([]),
   suppliers: z.array(listingSupplierSchema).max(30).default([]),
 });
