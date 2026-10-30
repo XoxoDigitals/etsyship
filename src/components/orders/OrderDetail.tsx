@@ -2,9 +2,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Badge, Button, Card, CardBody, CardHeader, Field, Input, Select } from "@/components/ui";
+import { Badge, Button, Card, CardBody, CardHeader, Field, Input, Select, Textarea } from "@/components/ui";
 import { fmtDate, fmtDateTime } from "@/lib/utils";
-import { formatMoney, CURRENCY_SYMBOLS } from "@/lib/money";
+import { formatMoney } from "@/lib/money";
+import { CURRENCY_SYMBOLS } from "@/lib/money";
+import { parseAddressBlock } from "@/lib/address";
 import type { RankedSupplier } from "@/lib/suppliers";
 
 type Cur = "USD" | "GBP" | "EUR";
@@ -43,6 +45,7 @@ export interface ShipmentData {
 export interface PurchaseData {
   id: string;
   supplierAccountId: string | null;
+  listingSupplierId?: string | null;
   supplierAccount: { label: string; emailMasked: string } | null;
   supplierOrderNo: string | null;
   buyingPrice: number;
@@ -124,12 +127,47 @@ export function OrderDetail({
   const [statusBusy, setStatusBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Edit Customer & Address state
+  const [editingDetails, setEditingDetails] = useState(false);
+  const [editOrderNumber, setEditOrderNumber] = useState(order.orderNumber);
+  const [editCustomerName, setEditCustomerName] = useState(order.customerName);
+  const [editCustomerEmail, setEditCustomerEmail] = useState(order.customerEmail ?? "");
+  const [editCustomerPhone, setEditCustomerPhone] = useState(order.customerPhone ?? "");
+  const [editShippingAddress, setEditShippingAddress] = useState(order.shippingAddress ?? "");
+  const [editShippingCity, setEditShippingCity] = useState(order.shippingCity ?? "");
+  const [editShippingState, setEditShippingState] = useState(order.shippingState ?? "");
+  const [editShippingZip, setEditShippingZip] = useState(order.shippingZip ?? "");
+  const [editShippingCountry, setEditShippingCountry] = useState(order.shippingCountry ?? "");
+  const [pasteBlock, setPasteBlock] = useState("");
+  const [savingDetails, setSavingDetails] = useState(false);
+
+  // Notes anytime state
+  const [notesValue, setNotesValue] = useState(order.notes ?? "");
+  const [savingNotes, setSavingNotes] = useState(false);
+  const [notesSavedMsg, setNotesSavedMsg] = useState<string | null>(null);
+
+  // Edit Line Items state
+  const [editingItems, setEditingItems] = useState(false);
+  const [draftItems, setDraftItems] = useState(
+    order.items.map((i) => ({
+      id: i.id,
+      listingId: i.listingId,
+      variantId: i.variantId,
+      title: i.title,
+      variantName: i.variantName ?? "",
+      quantity: String(i.quantity),
+      sellingPrice: String(i.sellingPrice),
+    }))
+  );
+  const [savingItems, setSavingItems] = useState(false);
+
   const cur = (order.currency || storeCurrency) as Cur;
 
   async function reload() {
     try {
       const fresh = await api<OrderDetailData>(`/api/orders/${order.id}`);
       setOrder(fresh);
+      setNotesValue(fresh.notes ?? "");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to refresh order");
     }
@@ -146,6 +184,149 @@ export function OrderDetail({
       setError(e instanceof Error ? e.message : "Failed to update status");
     } finally {
       setStatusBusy(false);
+    }
+  }
+
+  async function refundOrder() {
+    if (!window.confirm(`Mark order "${order.orderNumber}" as REFUNDED?`)) return;
+    await changeStatus("REFUNDED");
+  }
+
+  async function deleteOrder() {
+    if (!window.confirm(`Permanently delete order "${order.orderNumber}"? This cannot be undone.`)) return;
+    setStatusBusy(true);
+    setError(null);
+    try {
+      await api(`/api/orders/${order.id}`, { method: "DELETE" });
+      router.push(`/stores/${order.storeId}/orders`);
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete order");
+      setStatusBusy(false);
+    }
+  }
+
+  function startEditDetails() {
+    setEditOrderNumber(order.orderNumber);
+    setEditCustomerName(order.customerName);
+    setEditCustomerEmail(order.customerEmail ?? "");
+    setEditCustomerPhone(order.customerPhone ?? "");
+    setEditShippingAddress(order.shippingAddress ?? "");
+    setEditShippingCity(order.shippingCity ?? "");
+    setEditShippingState(order.shippingState ?? "");
+    setEditShippingZip(order.shippingZip ?? "");
+    setEditShippingCountry(order.shippingCountry ?? "");
+    setPasteBlock("");
+    setEditingDetails(true);
+  }
+
+  function handlePasteAddress(val: string) {
+    setPasteBlock(val);
+    if (!val.trim()) return;
+    const p = parseAddressBlock(val);
+    if (p.name) setEditCustomerName(p.name);
+    if (p.address) setEditShippingAddress(p.address);
+    if (p.city) setEditShippingCity(p.city);
+    if (p.state) setEditShippingState(p.state);
+    if (p.zip) setEditShippingZip(p.zip);
+    if (p.country) setEditShippingCountry(p.country);
+  }
+
+  async function saveDetails(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editCustomerName.trim()) {
+      setError("Customer name is required");
+      return;
+    }
+    setSavingDetails(true);
+    setError(null);
+    try {
+      await api(`/api/orders/${order.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          orderNumber: editOrderNumber.trim(),
+          customerName: editCustomerName.trim(),
+          customerEmail: editCustomerEmail.trim() || null,
+          customerPhone: editCustomerPhone.trim() || null,
+          shippingAddress: editShippingAddress.trim() || null,
+          shippingCity: editShippingCity.trim() || null,
+          shippingState: editShippingState.trim() || null,
+          shippingZip: editShippingZip.trim() || null,
+          shippingCountry: editShippingCountry.trim() || null,
+        }),
+      });
+      setEditingDetails(false);
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update order details");
+    } finally {
+      setSavingDetails(false);
+    }
+  }
+
+  async function saveNotes() {
+    setSavingNotes(true);
+    setNotesSavedMsg(null);
+    setError(null);
+    try {
+      await api(`/api/orders/${order.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ notes: notesValue.trim() || null }),
+      });
+      setNotesSavedMsg("Notes saved");
+      await reload();
+      setTimeout(() => setNotesSavedMsg(null), 2500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save notes");
+    } finally {
+      setSavingNotes(false);
+    }
+  }
+
+  function startEditItems() {
+    setDraftItems(
+      order.items.map((i) => ({
+        id: i.id,
+        listingId: i.listingId,
+        variantId: i.variantId,
+        title: i.title,
+        variantName: i.variantName ?? "",
+        quantity: String(i.quantity),
+        sellingPrice: String(i.sellingPrice),
+      }))
+    );
+    setEditingItems(true);
+  }
+
+  async function saveItems(e: React.FormEvent) {
+    e.preventDefault();
+    const cleaned = draftItems
+      .filter((i) => i.title.trim())
+      .map((i) => ({
+        listingId: i.listingId || null,
+        variantId: i.variantId || null,
+        title: i.title.trim(),
+        variantName: i.variantName.trim() || null,
+        quantity: Math.max(1, Math.round(Number(i.quantity) || 1)),
+        sellingPrice: Math.max(0, Number(i.sellingPrice) || 0),
+      }));
+    if (cleaned.length === 0) {
+      setError("Order must have at least one item");
+      return;
+    }
+    setSavingItems(true);
+    setError(null);
+    try {
+      await api(`/api/orders/${order.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ items: cleaned }),
+      });
+      setEditingItems(false);
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update order items");
+    } finally {
+      setSavingItems(false);
     }
   }
 
@@ -167,13 +348,13 @@ export function OrderDetail({
               <Link href={`/stores/${order.storeId}/orders`} className="text-xs text-brand-700 hover:underline">
                 ← All orders
               </Link>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <h1 className="text-2xl font-semibold text-slate-900">{order.orderNumber}</h1>
                 <Badge status={order.status} />
               </div>
               <p className="text-sm text-slate-500">Placed {fmtDate(order.placedAt)}</p>
             </div>
-            <div className="flex flex-wrap items-end gap-6">
+            <div className="flex flex-wrap items-end gap-4">
               <div>
                 <p className="text-xs uppercase text-slate-500">Order total</p>
                 <p className="text-xl font-semibold text-slate-900">{formatMoney(total, cur)}</p>
@@ -194,76 +375,308 @@ export function OrderDetail({
                   ))}
                 </Select>
               </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="secondary" onClick={startEditDetails}>
+                  Edit order &amp; address
+                </Button>
+                {order.status !== "REFUNDED" && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                    disabled={statusBusy}
+                    onClick={refundOrder}
+                  >
+                    Refund order
+                  </Button>
+                )}
+                <Button type="button" size="sm" variant="danger" disabled={statusBusy} onClick={deleteOrder}>
+                  Delete order
+                </Button>
+              </div>
             </div>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 text-sm sm:grid-cols-2">
-            <div>
-              <p className="text-xs uppercase text-slate-500">Customer</p>
-              <p className="font-medium text-slate-800">{order.customerName}</p>
-              {order.customerEmail && <p className="text-slate-600">{order.customerEmail}</p>}
-              {order.customerPhone && <p className="text-slate-600">{order.customerPhone}</p>}
-            </div>
-            <div>
-              <p className="text-xs uppercase text-slate-500">Ship to</p>
-              {addressLines.length ? (
-                addressLines.map((l, i) => (
-                  <p key={i} className="whitespace-pre-line text-slate-600">
-                    {l}
-                  </p>
-                ))
-              ) : (
-                <p className="text-slate-400">No address</p>
-              )}
-            </div>
-            {order.notes && (
-              <div className="sm:col-span-2">
-                <p className="text-xs uppercase text-slate-500">Notes</p>
-                <p className="whitespace-pre-line text-slate-600">{order.notes}</p>
+          {editingDetails ? (
+            <form onSubmit={saveDetails} className="mt-5 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-slate-800">Edit Order, Customer &amp; Shipping Address</h4>
+                <button
+                  type="button"
+                  onClick={() => setEditingDetails(false)}
+                  className="text-xs text-slate-500 hover:text-slate-800"
+                >
+                  Cancel
+                </button>
               </div>
-            )}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field label="Order number">
+                  <Input value={editOrderNumber} onChange={(e) => setEditOrderNumber(e.target.value)} required />
+                </Field>
+                <Field label="Customer name">
+                  <Input value={editCustomerName} onChange={(e) => setEditCustomerName(e.target.value)} required />
+                </Field>
+                <Field label="Customer email">
+                  <Input type="email" value={editCustomerEmail} onChange={(e) => setEditCustomerEmail(e.target.value)} />
+                </Field>
+                <Field label="Customer phone">
+                  <Input value={editCustomerPhone} onChange={(e) => setEditCustomerPhone(e.target.value)} />
+                </Field>
+                <div className="sm:col-span-2">
+                  <Field label="Street address">
+                    <Input value={editShippingAddress} onChange={(e) => setEditShippingAddress(e.target.value)} />
+                  </Field>
+                </div>
+                <Field label="City">
+                  <Input value={editShippingCity} onChange={(e) => setEditShippingCity(e.target.value)} />
+                </Field>
+                <Field label="State / Province">
+                  <Input value={editShippingState} onChange={(e) => setEditShippingState(e.target.value)} />
+                </Field>
+                <Field label="ZIP / Postal code">
+                  <Input value={editShippingZip} onChange={(e) => setEditShippingZip(e.target.value)} />
+                </Field>
+                <Field label="Country">
+                  <Input value={editShippingCountry} onChange={(e) => setEditShippingCountry(e.target.value)} />
+                </Field>
+                <div className="sm:col-span-2">
+                  <Field label="Quick paste address block (optional — auto-fills name & address fields)">
+                    <Textarea
+                      rows={2}
+                      value={pasteBlock}
+                      onChange={(e) => handlePasteAddress(e.target.value)}
+                      placeholder="Paste full buyer name + address block here to auto-fill…"
+                      className="font-mono text-xs"
+                    />
+                  </Field>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button type="submit" size="sm" disabled={savingDetails}>
+                  {savingDetails ? "Saving…" : "Save changes"}
+                </Button>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setEditingDetails(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <div className="mt-5 grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 text-sm sm:grid-cols-2">
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs uppercase text-slate-500">Customer</p>
+                  <button
+                    type="button"
+                    onClick={startEditDetails}
+                    className="text-xs font-medium text-brand-600 hover:underline"
+                  >
+                    Edit
+                  </button>
+                </div>
+                <p className="font-medium text-slate-800">{order.customerName}</p>
+                {order.customerEmail && <p className="text-slate-600">{order.customerEmail}</p>}
+                {order.customerPhone && <p className="text-slate-600">{order.customerPhone}</p>}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs uppercase text-slate-500">Ship to</p>
+                  <button
+                    type="button"
+                    onClick={startEditDetails}
+                    className="text-xs font-medium text-brand-600 hover:underline"
+                  >
+                    Edit
+                  </button>
+                </div>
+                {addressLines.length ? (
+                  addressLines.map((l, i) => (
+                    <p key={i} className="whitespace-pre-line text-slate-600">
+                      {l}
+                    </p>
+                  ))
+                ) : (
+                  <p className="text-slate-400">No address</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Always-available Order Notes section */}
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <div className="mb-1.5 flex items-center justify-between">
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Order notes</label>
+              {notesSavedMsg && <span className="text-xs font-medium text-emerald-600">{notesSavedMsg}</span>}
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+              <Textarea
+                rows={2}
+                value={notesValue}
+                onChange={(e) => setNotesValue(e.target.value)}
+                placeholder="Add order notes, custom instructions, or buyer messages anytime…"
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={savingNotes || notesValue.trim() === (order.notes ?? "").trim()}
+                onClick={saveNotes}
+                className="shrink-0"
+              >
+                {savingNotes ? "Saving…" : "Save notes"}
+              </Button>
+            </div>
           </div>
+
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         </CardBody>
       </Card>
 
       {/* Line items */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex items-center justify-between">
           <h3 className="font-semibold text-slate-800">Items</h3>
+          {!editingItems && (
+            <Button type="button" size="sm" variant="secondary" onClick={startEditItems}>
+              Edit items
+            </Button>
+          )}
         </CardHeader>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-100 text-xs uppercase text-slate-500">
-              <tr>
-                <th className="px-5 py-3">Title</th>
-                <th className="px-5 py-3">Variant</th>
-                <th className="px-5 py-3 text-right">Qty</th>
-                <th className="px-5 py-3 text-right">Unit price</th>
-                <th className="px-5 py-3 text-right">Line total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {order.items.map((i) => (
-                <tr key={i.id}>
-                  <td className="px-5 py-3 font-medium text-slate-800">{i.title}</td>
-                  <td className="px-5 py-3 text-slate-600">{i.variantName ?? "—"}</td>
-                  <td className="px-5 py-3 text-right">{i.quantity}</td>
-                  <td className="px-5 py-3 text-right">{formatMoney(i.sellingPrice, cur)}</td>
-                  <td className="px-5 py-3 text-right font-medium">{formatMoney(i.sellingPrice * i.quantity, cur)}</td>
-                </tr>
+        {editingItems ? (
+          <CardBody>
+            <form onSubmit={saveItems} className="space-y-3">
+              {draftItems.map((it, idx) => (
+                <div key={it.id || idx} className="grid grid-cols-1 gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-6">
+                  <div className="sm:col-span-2">
+                    <Field label="Product title">
+                      <Input
+                        value={it.title}
+                        onChange={(e) =>
+                          setDraftItems((prev) => prev.map((x, i) => (i === idx ? { ...x, title: e.target.value } : x)))
+                        }
+                        required
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Variant">
+                    <Input
+                      value={it.variantName}
+                      onChange={(e) =>
+                        setDraftItems((prev) =>
+                          prev.map((x, i) => (i === idx ? { ...x, variantName: e.target.value } : x))
+                        )
+                      }
+                      placeholder="Optional"
+                    />
+                  </Field>
+                  <Field label="Qty">
+                    <Input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={it.quantity}
+                      onChange={(e) =>
+                        setDraftItems((prev) => prev.map((x, i) => (i === idx ? { ...x, quantity: e.target.value } : x)))
+                      }
+                      required
+                    />
+                  </Field>
+                  <Field label={`Unit price (${cur})`}>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={it.sellingPrice}
+                      onChange={(e) =>
+                        setDraftItems((prev) =>
+                          prev.map((x, i) => (i === idx ? { ...x, sellingPrice: e.target.value } : x))
+                        )
+                      }
+                      required
+                    />
+                  </Field>
+                  <div className="flex items-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="text-rose-600"
+                      disabled={draftItems.length <= 1}
+                      onClick={() => setDraftItems((prev) => prev.filter((_, i) => i !== idx))}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
               ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t border-slate-200">
-                <td colSpan={4} className="px-5 py-3 text-right text-slate-500">
-                  Total
-                </td>
-                <td className="px-5 py-3 text-right font-semibold">{formatMoney(total, cur)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    setDraftItems((prev) => [
+                      ...prev,
+                      {
+                        id: `new-${Date.now()}`,
+                        listingId: null,
+                        variantId: null,
+                        title: "",
+                        variantName: "",
+                        quantity: "1",
+                        sellingPrice: "0",
+                      },
+                    ])
+                  }
+                >
+                  + Add item line
+                </Button>
+                <div className="flex gap-2">
+                  <Button type="submit" size="sm" disabled={savingItems}>
+                    {savingItems ? "Saving…" : "Save items"}
+                  </Button>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setEditingItems(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </form>
+          </CardBody>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-slate-100 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="px-5 py-3">Title</th>
+                  <th className="px-5 py-3">Variant</th>
+                  <th className="px-5 py-3 text-right">Qty</th>
+                  <th className="px-5 py-3 text-right">Unit price</th>
+                  <th className="px-5 py-3 text-right">Line total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {order.items.map((i) => (
+                  <tr key={i.id}>
+                    <td className="px-5 py-3 font-medium text-slate-800">{i.title}</td>
+                    <td className="px-5 py-3 text-slate-600">{i.variantName ?? "—"}</td>
+                    <td className="px-5 py-3 text-right">{i.quantity}</td>
+                    <td className="px-5 py-3 text-right">{formatMoney(i.sellingPrice, cur)}</td>
+                    <td className="px-5 py-3 text-right font-medium">{formatMoney(i.sellingPrice * i.quantity, cur)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-slate-200">
+                  <td colSpan={4} className="px-5 py-3 text-right text-slate-500">
+                    Total
+                  </td>
+                  <td className="px-5 py-3 text-right font-semibold">{formatMoney(total, cur)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
       </Card>
 
       <PurchasePanel
@@ -273,9 +686,17 @@ export function OrderDetail({
         supplierGroups={supplierGroups}
         onChanged={reload}
       />
-      <ShipmentsPanel order={order} onChanged={reload} onShipmentUpdated={(s) => {
-        setOrder((o) => ({ ...o, shipments: o.shipments.map((x) => (x.id === s.id ? s : x)) }));
-      }} />
+      <ShipmentsPanel
+        order={order}
+        onChanged={reload}
+        onShipmentUpdated={(s) => {
+          setOrder((o) => ({
+            ...o,
+            status: s.delivered && ["NEW", "PROCESSING", "SHIPPED"].includes(o.status) ? "DELIVERED" : o.status,
+            shipments: o.shipments.map((x) => (x.id === s.id ? s : x)),
+          }));
+        }}
+      />
 
       {/* Timeline */}
       <Card>
@@ -326,6 +747,7 @@ function PurchasePanel({
   supplierGroups: SupplierGroup[];
   onChanged: () => Promise<void>;
 }) {
+  const [editingPurchaseId, setEditingPurchaseId] = useState<string | null>(null);
   const [supplierAccountId, setSupplierAccountId] = useState("");
   const [listingSupplierId, setListingSupplierId] = useState<string | null>(null);
   const [supplierOrderNo, setSupplierOrderNo] = useState("");
@@ -337,9 +759,45 @@ function PurchasePanel({
   const [error, setError] = useState<string | null>(null);
 
   function pickSupplier(s: RankedSupplier) {
-    setListingSupplierId(s.id);
+    setListingSupplierId(s.id.startsWith("legacy-") ? null : s.id);
     if (s.unitPrice != null) setBuyingPrice(String(s.unitPrice));
     setBuyingCurrency(s.currency as Cur);
+  }
+
+  function startEditPurchase(p: PurchaseData) {
+    setEditingPurchaseId(p.id);
+    setSupplierAccountId(p.supplierAccountId ?? "");
+    setListingSupplierId(p.listingSupplierId ?? null);
+    setSupplierOrderNo(p.supplierOrderNo ?? "");
+    setBuyingPrice(String(p.buyingPrice));
+    setBuyingCurrency(p.buyingCurrency);
+    setCainiaoTrackingNo(p.cainiaoTrackingNo ?? "");
+    setError(null);
+  }
+
+  function cancelEditPurchase() {
+    setEditingPurchaseId(null);
+    setSupplierAccountId("");
+    setListingSupplierId(null);
+    setSupplierOrderNo("");
+    setBuyingPrice("");
+    setCainiaoTrackingNo("");
+    setError(null);
+  }
+
+  async function removePurchase(id: string) {
+    if (!window.confirm("Remove this supplier purchase record?")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/orders/${order.id}/purchase?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (editingPurchaseId === id) cancelEditPurchase();
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove purchase");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submit(e: React.FormEvent) {
@@ -347,34 +805,64 @@ function PurchasePanel({
     setBusy(true);
     setError(null);
     try {
-      await api(`/api/orders/${order.id}/purchase`, {
-        method: "POST",
-        body: JSON.stringify({
-          supplierAccountId: supplierAccountId || null,
-          listingSupplierId: listingSupplierId || null,
-          supplierOrderNo: supplierOrderNo.trim() || null,
-          buyingPrice: Number(buyingPrice),
-          buyingCurrency,
-          cainiaoTrackingNo: cainiaoTrackingNo.trim() || null,
-          markProcessing,
-        }),
-      });
-      setSupplierOrderNo("");
-      setBuyingPrice("");
-      setCainiaoTrackingNo("");
-      setListingSupplierId(null);
+      if (editingPurchaseId) {
+        await api(`/api/orders/${order.id}/purchase`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            id: editingPurchaseId,
+            supplierAccountId: supplierAccountId || null,
+            listingSupplierId: listingSupplierId || null,
+            supplierOrderNo: supplierOrderNo.trim() || null,
+            buyingPrice: Number(buyingPrice),
+            buyingCurrency,
+            cainiaoTrackingNo: cainiaoTrackingNo.trim() || null,
+            markProcessing,
+          }),
+        });
+      } else {
+        await api(`/api/orders/${order.id}/purchase`, {
+          method: "POST",
+          body: JSON.stringify({
+            supplierAccountId: supplierAccountId || null,
+            listingSupplierId: listingSupplierId || null,
+            supplierOrderNo: supplierOrderNo.trim() || null,
+            buyingPrice: Number(buyingPrice),
+            buyingCurrency,
+            cainiaoTrackingNo: cainiaoTrackingNo.trim() || null,
+            markProcessing,
+          }),
+        });
+      }
+      cancelEditPurchase();
       await onChanged();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add purchase");
+      setError(err instanceof Error ? err.message : "Failed to save purchase");
     } finally {
       setBusy(false);
     }
   }
 
+  // Find selected supplier URL or first available supplier URL for quick Visit Supplier button
+  const allSuppliers = supplierGroups.flatMap((g) => g.suppliers);
+  const activeSupplier =
+    allSuppliers.find((s) => s.id === listingSupplierId) ??
+    allSuppliers.find((s) => s.recommended && s.url) ??
+    allSuppliers.find((s) => s.url);
+
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold text-slate-800">Supplier purchases</h3>
+        {activeSupplier?.url && (
+          <a
+            href={activeSupplier.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-700 transition hover:bg-brand-100"
+          >
+            Visit supplier ({activeSupplier.name}) ↗
+          </a>
+        )}
       </CardHeader>
       <CardBody className="space-y-5">
         {order.purchases.length === 0 ? (
@@ -388,13 +876,14 @@ function PurchasePanel({
                   <th className="py-2 pr-3">Paid</th>
                   <th className="py-2 pr-3">≈ In {cur} (FX approx.)</th>
                   <th className="py-2 pr-3">Account</th>
-                  <th className="py-2 pr-3">Cainiao tracking</th>
-                  <th className="py-2">Date</th>
+                  <th className="py-2 pr-3">Supplier tracking</th>
+                  <th className="py-2 pr-3">Date</th>
+                  <th className="py-2 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {order.purchases.map((p) => (
-                  <tr key={p.id}>
+                  <tr key={p.id} className={editingPurchaseId === p.id ? "bg-brand-50/50" : undefined}>
                     <td className="py-2 pr-3 font-medium text-slate-800">{p.supplierOrderNo ?? "—"}</td>
                     <td className="py-2 pr-3">
                       {formatMoney(p.buyingPrice, p.buyingCurrency)} {p.buyingCurrency}
@@ -424,7 +913,23 @@ function PurchasePanel({
                       )}
                     </td>
                     <td className="py-2 pr-3 font-mono text-xs text-slate-600">{p.cainiaoTrackingNo ?? "—"}</td>
-                    <td className="py-2 text-slate-500">{fmtDate(p.purchasedAt)}</td>
+                    <td className="py-2 pr-3 text-slate-500">{fmtDate(p.purchasedAt)}</td>
+                    <td className="py-2 text-right">
+                      <div className="flex justify-end gap-1.5">
+                        <Button type="button" size="sm" variant="secondary" onClick={() => startEditPurchase(p)}>
+                          Edit
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="text-rose-600 hover:bg-rose-50"
+                          onClick={() => removePurchase(p.id)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -450,6 +955,14 @@ function PurchasePanel({
         )}
 
         <form onSubmit={submit} className="grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 sm:grid-cols-2 lg:grid-cols-3">
+          {editingPurchaseId && (
+            <div className="flex items-center justify-between rounded-lg bg-brand-50 px-3 py-2 text-xs font-medium text-brand-800 sm:col-span-2 lg:col-span-3">
+              <span>Editing recorded supplier purchase — update any field below and click Save changes.</span>
+              <button type="button" onClick={cancelEditPurchase} className="underline hover:text-brand-900">
+                Cancel edit
+              </button>
+            </div>
+          )}
           <Field label="Supplier account">
             <Select value={supplierAccountId} onChange={(e) => setSupplierAccountId(e.target.value)}>
               <option value="">— none —</option>
@@ -463,8 +976,8 @@ function PurchasePanel({
           <Field label="Supplier order number">
             <Input value={supplierOrderNo} onChange={(e) => setSupplierOrderNo(e.target.value)} placeholder="AliExpress order #" />
           </Field>
-          <Field label="Cainiao tracking number" hint="Adds & syncs a supplier shipment">
-            <Input value={cainiaoTrackingNo} onChange={(e) => setCainiaoTrackingNo(e.target.value)} placeholder="LP00…" />
+          <Field label="Supplier tracking number" hint="Cainiao, USPS, UPS, or FedEx number">
+            <Input value={cainiaoTrackingNo} onChange={(e) => setCainiaoTrackingNo(e.target.value)} placeholder="LP00… / 1Z… / 9400…" />
           </Field>
           <Field label="Buying price">
             <Input
@@ -498,10 +1011,15 @@ function PurchasePanel({
             </label>
           </div>
           {error && <p className="text-sm text-red-600 sm:col-span-2 lg:col-span-3">{error}</p>}
-          <div className="sm:col-span-2 lg:col-span-3">
+          <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-3">
             <Button type="submit" disabled={busy || buyingPrice === ""}>
-              {busy ? "Saving…" : "Add purchase"}
+              {busy ? "Saving…" : editingPurchaseId ? "Save purchase changes" : "Add purchase"}
             </Button>
+            {editingPurchaseId && (
+              <Button type="button" variant="secondary" onClick={cancelEditPurchase}>
+                Cancel
+              </Button>
+            )}
           </div>
         </form>
       </CardBody>
@@ -554,11 +1072,15 @@ function SupplierGroupBlock({
         {group.suppliers.map((s) => {
           const selected = s.id === selectedId;
           return (
-            <button
+            <div
               key={s.id}
-              type="button"
               onClick={() => onPick(s)}
-              className={`rounded-lg border p-3 text-left transition ${
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") onPick(s);
+              }}
+              className={`cursor-pointer rounded-lg border p-3 text-left transition ${
                 selected ? "border-brand-500 ring-2 ring-brand-100" : "border-slate-200 hover:border-brand-300"
               }`}
             >
@@ -566,19 +1088,32 @@ function SupplierGroupBlock({
                 <span className="text-sm font-medium text-slate-800">{s.name}</span>
                 <SupplierBadges s={s} />
               </div>
-              <div className="mt-1 text-sm text-slate-700">
-                {s.landedPrice != null ? (
-                  <>
-                    <span className="font-semibold">{formatMoney(s.landedPrice, storeCur)}</span>
-                    {s.currency !== storeCur && s.unitPrice != null && (
-                      <span className="ml-1 text-xs text-slate-400">
-                        ({CURRENCY_SYMBOLS[s.currency as keyof typeof CURRENCY_SYMBOLS] ?? ""}
-                        {s.unitPrice} {s.currency})
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  <span className="text-slate-400">No price set</span>
+              <div className="mt-1 flex items-center justify-between gap-2 text-sm text-slate-700">
+                <div>
+                  {s.landedPrice != null ? (
+                    <>
+                      <span className="font-semibold">{formatMoney(s.landedPrice, storeCur)}</span>
+                      {s.currency !== storeCur && s.unitPrice != null && (
+                        <span className="ml-1 text-xs text-slate-400">
+                          ({CURRENCY_SYMBOLS[s.currency as keyof typeof CURRENCY_SYMBOLS] ?? ""}
+                          {s.unitPrice} {s.currency})
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-slate-400">No price set</span>
+                  )}
+                </div>
+                {s.url && (
+                  <a
+                    href={s.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="inline-flex items-center gap-1 rounded-md border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700 transition hover:bg-brand-100"
+                  >
+                    Visit supplier ↗
+                  </a>
                 )}
               </div>
               <div className="mt-0.5 text-xs text-slate-500">
@@ -592,7 +1127,7 @@ function SupplierGroupBlock({
                   "Shipping time not set"
                 )}
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
@@ -730,7 +1265,7 @@ function ShipmentsPanel({
           orderId: order.id,
           kind,
           trackingNumber: trackingNumber.trim(),
-          carrierCode: kind === "CUSTOMER" && carrierCode !== "auto" ? carrierCode : null,
+          carrierCode: carrierCode !== "auto" ? carrierCode : null,
         }),
       });
       setTrackingNumber("");
@@ -749,14 +1284,14 @@ function ShipmentsPanel({
       </CardHeader>
       <CardBody className="space-y-6">
         <ShipmentGroup
-          title="Supplier (Cainiao / AliExpress)"
-          empty="No supplier tracking yet. Add a Cainiao number in the purchase form above, or below."
+          title="Supplier Tracking (Cainiao / USPS / UPS / FedEx)"
+          empty="No supplier tracking yet. Add a tracking number in the purchase form above, or below."
           shipments={supplier}
           onChanged={onChanged}
           onShipmentUpdated={onShipmentUpdated}
         />
         <ShipmentGroup
-          title="Customer (FedEx/USPS/UPS)"
+          title="Customer / Buyer Tracking (FedEx / USPS / UPS)"
           empty="No customer tracking yet. Add the number you give the buyer below."
           shipments={customer}
           onChanged={onChanged}
@@ -766,7 +1301,7 @@ function ShipmentsPanel({
         <form onSubmit={add} className="grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 sm:grid-cols-4">
           <Field label="Tracking type">
             <Select value={kind} onChange={(e) => setKind(e.target.value as "CUSTOMER" | "SUPPLIER")}>
-              <option value="CUSTOMER">Customer</option>
+              <option value="CUSTOMER">Customer (Buyer)</option>
               <option value="SUPPLIER">Supplier</option>
             </Select>
           </Field>
@@ -774,11 +1309,12 @@ function ShipmentsPanel({
             <Input value={trackingNumber} onChange={(e) => setTrackingNumber(e.target.value)} required minLength={3} />
           </Field>
           <Field label="Carrier">
-            <Select value={carrierCode} onChange={(e) => setCarrierCode(e.target.value)} disabled={kind === "SUPPLIER"}>
+            <Select value={carrierCode} onChange={(e) => setCarrierCode(e.target.value)}>
               <option value="auto">Auto-detect</option>
-              <option value="fedex">FedEx</option>
               <option value="usps">USPS</option>
               <option value="ups">UPS</option>
+              <option value="fedex">FedEx</option>
+              <option value="cainiao">Cainiao / AliExpress</option>
               <option value="dhl">DHL</option>
             </Select>
           </Field>
@@ -858,6 +1394,9 @@ function ShipmentCard({
         body: JSON.stringify({ status }),
       });
       onShipmentUpdated(out.shipment);
+      if (out.shipment.delivered) {
+        await onChanged();
+      }
       setMsg(`Marked ${status.replace(/_/g, " ").toLowerCase()}`);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Update failed");
@@ -876,6 +1415,9 @@ function ShipmentCard({
         { method: "POST" }
       );
       onShipmentUpdated(out.shipment);
+      if (out.shipment.delivered) {
+        await onChanged();
+      }
       setMsg(
         out.outcome.ok
           ? `${out.outcome.newEvents} new event${out.outcome.newEvents === 1 ? "" : "s"}`

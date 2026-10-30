@@ -23,7 +23,7 @@ export default async function NewListingPage({ params }: { params: Promise<{ sto
         </Link>
         <h1 className="mt-1 text-2xl font-semibold text-slate-900">Add listing</h1>
       </div>
-      <ListingForm storeId={store.id} storeCurrency={store.currency} />
+      <ListingForm storeId={store.id} storeCurrency={store.currency} storeType={store.storeType} />
     </div>
   );
 }

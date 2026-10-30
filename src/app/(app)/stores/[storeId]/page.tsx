@@ -68,6 +68,7 @@ export default async function StoreDashboardPage({ params }: { params: Promise<{
           <div className="flex items-center gap-2.5">
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">{store.name}</h1>
             <Badge>{store.platform}</Badge>
+            <Badge>{store.storeType === "OWN_STOCK" ? "Own Stock" : "Dropship"}</Badge>
           </div>
           <p className="mt-1 text-sm text-slate-500">
             Performance snapshot · {store.currency} · Last 30 days

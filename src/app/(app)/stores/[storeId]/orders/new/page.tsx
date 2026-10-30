@@ -24,6 +24,7 @@ export default async function NewOrderPage({ params }: { params: Promise<{ store
       id: true,
       title: true,
       listedPrice: true,
+      stockQuantity: true,
       supplierCurrency: true,
       images: {
         orderBy: [{ isPrimary: "desc" }, { position: "asc" }],
@@ -32,7 +33,7 @@ export default async function NewOrderPage({ params }: { params: Promise<{ store
       },
       variants: {
         orderBy: { position: "asc" },
-        select: { id: true, name: true, listedPrice: true, supplierPrice: true, imageUrl: true },
+        select: { id: true, name: true, listedPrice: true, supplierPrice: true, stockQuantity: true, imageUrl: true },
       },
     },
   });
@@ -41,6 +42,7 @@ export default async function NewOrderPage({ params }: { params: Promise<{ store
     id: l.id,
     title: l.title,
     listedPrice: num(l.listedPrice),
+    stockQuantity: l.stockQuantity,
     supplierCurrency: l.supplierCurrency,
     imageUrl: l.images[0]?.url ?? null,
     variants: l.variants.map((v) => ({
@@ -48,6 +50,7 @@ export default async function NewOrderPage({ params }: { params: Promise<{ store
       name: v.name,
       listedPrice: num(v.listedPrice),
       supplierPrice: num(v.supplierPrice),
+      stockQuantity: v.stockQuantity,
       imageUrl: v.imageUrl ?? null,
     })),
   }));

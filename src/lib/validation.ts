@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const currencyEnum = z.enum(["USD", "GBP", "EUR"]);
 export const platformEnum = z.enum(["ETSY", "EBAY", "SHOPIFY", "OTHER"]);
+export const storeTypeEnum = z.enum(["DROPSHIP", "OWN_STOCK"]);
 export const listingStatusEnum = z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]);
 export const orderStatusEnum = z.enum([
   "NEW",
@@ -44,6 +45,7 @@ export const loginSchema = z.object({
 export const storeSchema = z.object({
   name: z.string().min(1).max(120),
   platform: platformEnum.default("ETSY"),
+  storeType: storeTypeEnum.default("DROPSHIP"),
   currency: currencyEnum.default("USD"),
   feePercent: z.coerce.number().min(0).max(100).default(0),
   notes: z.string().max(2000).optional().nullable(),
@@ -73,6 +75,7 @@ export const listingVariantSchema = z.object({
   imageUrl: imageUrlSchema.optional().nullable().or(z.literal("")),
   supplierPrice: optMoney,
   listedPrice: optMoney,
+  stockQuantity: z.coerce.number().int().min(0).max(1_000_000).optional().nullable(),
 });
 
 // A listing sourcing option (where/for-how-much to buy). A listing can have several.
@@ -97,6 +100,7 @@ export const listingSchema = z.object({
   supplierPrice: optMoney,
   supplierCurrency: currencyEnum.default("USD"),
   listedPrice: optMoney,
+  stockQuantity: z.coerce.number().int().min(0).max(1_000_000).optional().nullable(),
   status: listingStatusEnum.default("ACTIVE"),
   images: z.array(imageUrlSchema).max(20).default([]),
   variants: z.array(listingVariantSchema).max(100).default([]),
@@ -149,6 +153,10 @@ export const supplierPurchaseSchema = z.object({
   cainiaoTrackingNo: z.string().max(120).optional().nullable(),
   // Convenience: also set the order to PROCESSING
   markProcessing: z.boolean().default(true),
+});
+
+export const updateSupplierPurchaseSchema = supplierPurchaseSchema.extend({
+  id: z.string().min(1),
 });
 
 // ---- Shipment / tracking ----

@@ -1,7 +1,8 @@
 import crypto from "crypto";
 import { prisma } from "../db";
+import { orderEvent } from "../audit";
 import { cainiaoProvider } from "./cainiao";
-import { makeCarrierProvider, CarrierCode, type TrackingConfig } from "./carriers";
+import { makeCarrierProvider, detectCarrier, carrierDeepLink, CARRIER_NAMES, CarrierCode, type TrackingConfig } from "./carriers";
 import type { NormalizedResult, TrackingProvider } from "./types";
 
 export * from "./types";
@@ -23,8 +24,31 @@ export function providerFor(
   carrierCode?: string | null,
   config?: TrackingConfig
 ): TrackingProvider {
-  if (kind === "SUPPLIER") return cainiaoProvider;
-  return makeCarrierProvider((carrierCode as CarrierCode) || undefined, config);
+  const hint = (carrierCode as CarrierCode) || undefined;
+  if (kind === "SUPPLIER") {
+    if (hint && hint !== "cainiao" && hint !== "other") {
+      return makeCarrierProvider(hint, config);
+    }
+    return {
+      code: "cainiao",
+      deepLink: (tn) => {
+        const detected = detectCarrier(tn, hint);
+        if (detected !== "other" && detected !== "cainiao") return carrierDeepLink(tn, detected);
+        return cainiaoProvider.deepLink(tn);
+      },
+      async fetch(tn: string): Promise<NormalizedResult> {
+        const detected = detectCarrier(tn, hint);
+        if (detected === "ups" || detected === "usps" || detected === "fedex" || detected === "dhl") {
+          const res = await makeCarrierProvider(detected, config).fetch(tn);
+          if (res.found) return res;
+        }
+        const cn = await cainiaoProvider.fetch(tn);
+        if (cn.found && cn.events.length > 0) return cn;
+        return await makeCarrierProvider(detected === "other" ? undefined : detected, config).fetch(tn);
+      },
+    };
+  }
+  return makeCarrierProvider(hint, config);
 }
 
 /**
@@ -121,14 +145,21 @@ export async function syncShipment(shipmentId: string): Promise<SyncOutcome> {
     },
   });
 
-  // When supplier parcel is delivered, nudge the order forward if still processing.
-  if (delivered && shipment.kind === "CUSTOMER") {
-    await prisma.order
+  // Mark order as DELIVERED when either SUPPLIER or CUSTOMER tracking is delivered.
+  if (delivered && (shipment.kind === "CUSTOMER" || shipment.kind === "SUPPLIER")) {
+    const res = await prisma.order
       .updateMany({
-        where: { id: shipment.orderId, status: { in: ["PROCESSING", "SHIPPED"] } },
+        where: { id: shipment.orderId, status: { in: ["NEW", "PROCESSING", "SHIPPED"] } },
         data: { status: "DELIVERED" },
       })
-      .catch(() => void 0);
+      .catch(() => ({ count: 0 }));
+    if (res.count > 0) {
+      await orderEvent(
+        shipment.orderId,
+        "STATUS_CHANGE",
+        `Status → DELIVERED (${shipment.kind.toLowerCase()} tracking delivered)`
+      ).catch(() => void 0);
+    }
   }
 
   return { ok: true, newEvents, status: result.status, delivered };

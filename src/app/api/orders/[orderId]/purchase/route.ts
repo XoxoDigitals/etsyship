@@ -1,11 +1,11 @@
 import { prisma } from "@/lib/db";
 import { ok, fail, handle, parseJson } from "@/lib/api";
 import { requireUserId, assertOrderOwner } from "@/lib/session";
-import { supplierPurchaseSchema } from "@/lib/validation";
+import { supplierPurchaseSchema, updateSupplierPurchaseSchema } from "@/lib/validation";
 import { audit, orderEvent } from "@/lib/audit";
 import { convert } from "@/lib/currency";
 import { money } from "@/lib/money";
-import { syncShipment, deepLinkFor } from "@/lib/tracking";
+import { syncShipment, deepLinkFor, detectCarrier } from "@/lib/tracking";
 
 export const dynamic = "force-dynamic";
 
@@ -72,16 +72,18 @@ export const POST = handle(async (req: Request, { params }: { params: Promise<{ 
 
   let shipmentOut: unknown = null;
   if (tracking) {
+    const detected = detectCarrier(tracking);
+    const carrierCode = detected === "other" ? "cainiao" : detected;
     const shipment = await prisma.shipment.upsert({
       where: { orderId_kind_trackingNumber: { orderId: order.id, kind: "SUPPLIER", trackingNumber: tracking } },
       create: {
         orderId: order.id,
         kind: "SUPPLIER",
         trackingNumber: tracking,
-        carrierCode: "cainiao",
+        carrierCode,
         nextSyncAt: new Date(),
       },
-      update: { nextSyncAt: new Date() },
+      update: { carrierCode, nextSyncAt: new Date() },
     });
     await syncShipment(shipment.id);
     const fresh = await prisma.shipment.findUniqueOrThrow({
@@ -119,6 +121,7 @@ export const POST = handle(async (req: Request, { params }: { params: Promise<{ 
         id: purchase.id,
         orderId: purchase.orderId,
         supplierAccountId: purchase.supplierAccountId,
+        listingSupplierId: purchase.listingSupplierId,
         supplierAccount: purchase.supplierAccount,
         supplierOrderNo: purchase.supplierOrderNo,
         buyingPrice: money(purchase.buyingPrice),
@@ -134,4 +137,119 @@ export const POST = handle(async (req: Request, { params }: { params: Promise<{ 
     },
     { status: 201 }
   );
+});
+
+export const PATCH = handle(async (req: Request, { params }: { params: Promise<{ orderId: string }> }) => {
+  const { orderId } = await params;
+  const userId = await requireUserId();
+  const input = updateSupplierPurchaseSchema.parse(await parseJson(req));
+  const order = await assertOrderOwner(orderId, userId);
+
+  const existing = await prisma.supplierPurchase.findFirst({
+    where: { id: input.id, orderId: order.id },
+  });
+  if (!existing) return fail("Supplier purchase not found", 404);
+
+  if (input.supplierAccountId) {
+    const acct = await prisma.supplierAccount.findUnique({
+      where: { id: input.supplierAccountId },
+      select: { storeId: true },
+    });
+    if (!acct || acct.storeId !== order.storeId) return fail("Supplier account does not belong to this store", 403);
+  }
+
+  if (input.listingSupplierId) {
+    const ls = await prisma.listingSupplier.findUnique({
+      where: { id: input.listingSupplierId },
+      select: { listing: { select: { storeId: true } } },
+    });
+    if (!ls || ls.listing.storeId !== order.storeId) return fail("Supplier does not belong to this store", 403);
+  }
+
+  let inOrder: string;
+  let rate: string;
+  if (input.buyingCurrency === order.currency) {
+    inOrder = String(input.buyingPrice);
+    rate = "1";
+  } else {
+    const c = await convert(input.buyingPrice, input.buyingCurrency, order.currency);
+    inOrder = c.amount.toString();
+    rate = c.rate.toString();
+  }
+
+  const tracking = input.cainiaoTrackingNo?.trim() || null;
+
+  const purchase = await prisma.supplierPurchase.update({
+    where: { id: existing.id },
+    data: {
+      supplierAccountId: input.supplierAccountId || null,
+      listingSupplierId: input.listingSupplierId || null,
+      supplierOrderNo: input.supplierOrderNo?.trim() || null,
+      buyingPrice: input.buyingPrice,
+      buyingCurrency: input.buyingCurrency,
+      buyingPriceInOrderCurrency: inOrder,
+      fxRateUsed: rate,
+      cainiaoTrackingNo: tracking,
+    },
+    include: { supplierAccount: { select: { label: true, emailMasked: true } } },
+  });
+
+  if (tracking && tracking !== existing.cainiaoTrackingNo) {
+    const detected = detectCarrier(tracking);
+    const carrierCode = detected === "other" ? "cainiao" : detected;
+    const shipment = await prisma.shipment.upsert({
+      where: { orderId_kind_trackingNumber: { orderId: order.id, kind: "SUPPLIER", trackingNumber: tracking } },
+      create: {
+        orderId: order.id,
+        kind: "SUPPLIER",
+        trackingNumber: tracking,
+        carrierCode,
+        nextSyncAt: new Date(),
+      },
+      update: { carrierCode, nextSyncAt: new Date() },
+    });
+    await syncShipment(shipment.id);
+    await orderEvent(order.id, "TRACKING_ADDED", `SUPPLIER tracking ${tracking}`);
+  }
+
+  await orderEvent(order.id, "PURCHASE_UPDATED", `Supplier purchase updated: ${input.buyingPrice} ${input.buyingCurrency}`);
+  await audit({ userId, action: "UPDATE", entity: "SupplierPurchase", entityId: purchase.id, meta: { orderId: order.id } });
+
+  return ok({
+    purchase: {
+      id: purchase.id,
+      orderId: purchase.orderId,
+      supplierAccountId: purchase.supplierAccountId,
+      listingSupplierId: purchase.listingSupplierId,
+      supplierAccount: purchase.supplierAccount,
+      supplierOrderNo: purchase.supplierOrderNo,
+      buyingPrice: money(purchase.buyingPrice),
+      buyingCurrency: purchase.buyingCurrency,
+      buyingPriceInOrderCurrency:
+        purchase.buyingPriceInOrderCurrency == null ? null : money(purchase.buyingPriceInOrderCurrency),
+      fxRateUsed: purchase.fxRateUsed == null ? null : Number(purchase.fxRateUsed),
+      cainiaoTrackingNo: purchase.cainiaoTrackingNo,
+      purchasedAt: purchase.purchasedAt.toISOString(),
+    },
+  });
+});
+
+export const DELETE = handle(async (req: Request, { params }: { params: Promise<{ orderId: string }> }) => {
+  const { orderId } = await params;
+  const userId = await requireUserId();
+  const order = await assertOrderOwner(orderId, userId);
+
+  const url = new URL(req.url);
+  const purchaseId = url.searchParams.get("id");
+  if (!purchaseId) return fail("Purchase id is required", 400);
+
+  const existing = await prisma.supplierPurchase.findFirst({
+    where: { id: purchaseId, orderId: order.id },
+  });
+  if (!existing) return fail("Supplier purchase not found", 404);
+
+  await prisma.supplierPurchase.delete({ where: { id: existing.id } });
+  await orderEvent(order.id, "PURCHASE_REMOVED", `Supplier purchase removed`);
+  await audit({ userId, action: "DELETE", entity: "SupplierPurchase", entityId: existing.id, meta: { orderId: order.id } });
+  return ok({ id: existing.id, deleted: true });
 });

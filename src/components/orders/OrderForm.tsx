@@ -1,7 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Card, CardBody, CardHeader, Field, Input, Textarea } from "@/components/ui";
+import { Button, Card, CardBody, CardHeader, Field, Input, Select, Textarea } from "@/components/ui";
 import { formatMoney, CURRENCY_SYMBOLS } from "@/lib/money";
 import { parseAddressBlock } from "@/lib/address";
 
@@ -10,12 +10,14 @@ export interface FormVariant {
   name: string;
   listedPrice: number | null;
   supplierPrice: number | null;
+  stockQuantity?: number | null;
   imageUrl: string | null;
 }
 export interface FormListing {
   id: string;
   title: string;
   listedPrice: number | null;
+  stockQuantity?: number | null;
   supplierCurrency: string;
   imageUrl: string | null;
   variants: FormVariant[];
@@ -24,11 +26,19 @@ export interface FormListing {
 function Thumb({ url, alt }: { url: string | null; alt: string }) {
   if (url) {
     // eslint-disable-next-line @next/next/no-img-element -- supplier CDN hosts aren't in next.config
-    return <img src={url} alt={alt} loading="lazy" className="h-28 w-full rounded-lg object-cover" />;
+    return (
+      <img
+        src={url}
+        alt={alt}
+        loading="lazy"
+        referrerPolicy={url.startsWith("http") ? "no-referrer" : undefined}
+        className="aspect-square w-full rounded-xl border border-slate-100 object-cover"
+      />
+    );
   }
   return (
-    <div className="flex h-28 w-full items-center justify-center rounded-lg bg-slate-100 text-slate-300">
-      <svg className="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <div className="flex aspect-square w-full items-center justify-center rounded-xl bg-slate-100 text-slate-300">
+      <svg className="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <rect x="3" y="3" width="18" height="18" rx="2" />
         <circle cx="8.5" cy="8.5" r="1.5" />
         <path d="m21 15-5-5L5 21" strokeLinecap="round" strokeLinejoin="round" />
@@ -65,6 +75,7 @@ export function OrderForm({
 
   // Cart
   const [lines, setLines] = useState<Line[]>([]);
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
   const [customTitle, setCustomTitle] = useState("");
   const [customPrice, setCustomPrice] = useState("");
@@ -234,50 +245,113 @@ export function OrderForm({
                 {listings.length ? "No listings match your search." : "No active listings yet — use a custom item below."}
               </p>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
                 {filtered.map((l) => {
                   const base = l.listedPrice;
                   if (l.variants.length === 0) {
+                    const outOfStock = typeof l.stockQuantity === "number" && l.stockQuantity <= 0;
                     return (
-                      <button
+                      <div
                         key={l.id}
-                        type="button"
-                        onClick={() => addProduct(l)}
-                        className="group flex flex-col rounded-xl border border-slate-200 bg-white p-2.5 text-left transition hover:border-brand-400 hover:shadow-md"
+                        className="group flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-brand-400 hover:shadow-md"
                       >
-                        <Thumb url={l.imageUrl} alt={l.title} />
-                        <span className="mt-2 line-clamp-2 text-sm font-medium text-slate-800">{l.title}</span>
-                        <span className="mt-2 flex items-center justify-between">
+                        <div>
+                          <Thumb url={l.imageUrl} alt={l.title} />
+                          <div className="mt-2.5 line-clamp-2 text-sm font-medium text-slate-800" title={l.title}>
+                            {l.title}
+                          </div>
+                          {typeof l.stockQuantity === "number" && (
+                            <div className="mt-1">
+                              <span
+                                className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                                  outOfStock ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"
+                                }`}
+                              >
+                                {outOfStock ? "Out of stock" : `${l.stockQuantity} in stock`}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-3 flex items-center justify-between pt-1">
                           <span className="text-sm font-semibold text-slate-900">
                             {base != null ? formatMoney(base, cur) : "—"}
                           </span>
-                          <span className="rounded-md bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700 group-hover:bg-brand-100">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => addProduct(l)}
+                            className="border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100"
+                          >
                             + Add
-                          </span>
-                        </span>
-                      </button>
+                          </Button>
+                        </div>
+                      </div>
                     );
                   }
+
+                  const selectedVarId = selectedVariants[l.id] || l.variants[0]?.id || "";
+                  const selectedVar = l.variants.find((v) => v.id === selectedVarId) ?? l.variants[0];
+                  const activePrice = selectedVar?.listedPrice ?? base;
+                  const activeThumb = selectedVar?.imageUrl || l.imageUrl;
+                  const activeStock = selectedVar?.stockQuantity ?? l.stockQuantity;
+                  const outOfStock = typeof activeStock === "number" && activeStock <= 0;
+
                   return (
-                    <div key={l.id} className="rounded-xl border border-slate-200 bg-white p-2.5">
-                      <Thumb url={l.imageUrl} alt={l.title} />
-                      <div className="mt-2 line-clamp-2 text-sm font-medium text-slate-800">{l.title}</div>
-                      <div className="mt-0.5 text-xs text-slate-400">Pick a variant</div>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {l.variants.map((v) => {
-                          const vp = v.listedPrice ?? base;
-                          return (
-                            <button
-                              key={v.id}
-                              type="button"
-                              onClick={() => addProduct(l, v)}
-                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700"
+                    <div
+                      key={l.id}
+                      className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 transition hover:border-brand-300 hover:shadow-sm"
+                    >
+                      <div>
+                        <Thumb url={activeThumb} alt={l.title} />
+                        <div className="mt-2.5 line-clamp-2 text-sm font-medium text-slate-800" title={l.title}>
+                          {l.title}
+                        </div>
+                        {typeof activeStock === "number" && (
+                          <div className="mt-1">
+                            <span
+                              className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                                outOfStock ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"
+                              }`}
                             >
-                              {v.name}
-                              {vp != null && <span className="text-slate-400">· {formatMoney(vp, cur)}</span>}
-                            </button>
-                          );
-                        })}
+                              {outOfStock ? "Out of stock" : `${activeStock} in stock`}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-3 space-y-2 pt-1">
+                        <Select
+                          value={selectedVar?.id ?? ""}
+                          onChange={(e) => setSelectedVariants((prev) => ({ ...prev, [l.id]: e.target.value }))}
+                          className="py-1.5 text-xs"
+                        >
+                          {l.variants.map((v) => {
+                            const vp = v.listedPrice ?? base;
+                            const stk = typeof v.stockQuantity === "number" ? ` (${v.stockQuantity} left)` : "";
+                            return (
+                              <option key={v.id} value={v.id}>
+                                {v.name}
+                                {vp != null ? ` · ${formatMoney(vp, cur)}` : ""}
+                                {stk}
+                              </option>
+                            );
+                          })}
+                        </Select>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-semibold text-slate-900">
+                            {activePrice != null ? formatMoney(activePrice, cur) : "—"}
+                          </span>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => addProduct(l, selectedVar)}
+                            className="border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100"
+                          >
+                            + Add
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   );

@@ -23,6 +23,7 @@ export const PATCH = handle(async (req: Request, { params }: { params: Promise<{
     data: {
       ...(input.name !== undefined && { name: input.name }),
       ...(input.platform !== undefined && { platform: input.platform }),
+      ...(input.storeType !== undefined && { storeType: input.storeType }),
       ...(input.currency !== undefined && { currency: input.currency }),
       ...(input.feePercent !== undefined && { feePercent: input.feePercent }),
       ...(input.notes !== undefined && { notes: input.notes }),

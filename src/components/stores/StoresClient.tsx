@@ -8,8 +8,10 @@ interface StoreRow {
   id: string;
   name: string;
   platform: string;
+  storeType?: string;
   currency: string;
   feePercent: string | number;
+  notes?: string | null;
   _count: { listings: number; orders: number };
 }
 
@@ -22,6 +24,7 @@ const PLATFORM_BADGE: Record<string, string> = {
 
 export function StoresClient({ stores }: { stores: StoreRow[] }) {
   const [adding, setAdding] = useState(false);
+  const [editingStore, setEditingStore] = useState<StoreRow | null>(null);
 
   return (
     <div className="space-y-6">
@@ -36,6 +39,20 @@ export function StoresClient({ stores }: { stores: StoreRow[] }) {
       </div>
 
       {adding && <StoreForm onDone={() => setAdding(false)} />}
+      {editingStore && (
+        <StoreForm
+          storeId={editingStore.id}
+          initial={{
+            name: editingStore.name,
+            platform: editingStore.platform,
+            storeType: editingStore.storeType ?? "DROPSHIP",
+            currency: editingStore.currency,
+            feePercent: Number(editingStore.feePercent),
+            notes: editingStore.notes ?? "",
+          }}
+          onDone={() => setEditingStore(null)}
+        />
+      )}
 
       {stores.length === 0 && !adding ? (
         <EmptyState
@@ -59,13 +76,24 @@ export function StoresClient({ stores }: { stores: StoreRow[] }) {
                         {s.currency} · {Number(s.feePercent)}% platform fee
                       </p>
                     </div>
-                    <span
-                      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ${
-                        PLATFORM_BADGE[s.platform] || PLATFORM_BADGE.OTHER
-                      }`}
-                    >
-                      {s.platform}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ${
+                          s.storeType === "OWN_STOCK"
+                            ? "bg-purple-50 text-purple-700 ring-purple-600/20"
+                            : "bg-sky-50 text-sky-700 ring-sky-600/20"
+                        }`}
+                      >
+                        {s.storeType === "OWN_STOCK" ? "Own Stock" : "Dropship"}
+                      </span>
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ${
+                          PLATFORM_BADGE[s.platform] || PLATFORM_BADGE.OTHER
+                        }`}
+                      >
+                        {s.platform}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50/90 p-3 ring-1 ring-inset ring-slate-200/60">
@@ -80,8 +108,18 @@ export function StoresClient({ stores }: { stores: StoreRow[] }) {
                   </div>
 
                   <div className="flex items-center justify-between pt-1 text-xs font-semibold text-brand-600">
-                    <span>Open store workspace</span>
-                    <span className="transition-transform group-hover:translate-x-0.5">→</span>
+                    <span>Open store workspace →</span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setEditingStore(s);
+                      }}
+                      className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-brand-300 hover:text-brand-700"
+                    >
+                      Edit store
+                    </button>
                   </div>
                 </CardBody>
               </Card>

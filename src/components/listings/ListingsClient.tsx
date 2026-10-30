@@ -14,6 +14,8 @@ export type ListingRow = {
   supplierCurrency: Cur;
   supplierPrice: number | null;
   listedPrice: number | null;
+  stockQuantity?: number | null;
+  effectiveStock?: number | null;
   images: { id: string; url: string; isPrimary: boolean }[];
   _count: { variants: number };
 };
@@ -74,13 +76,13 @@ export function ListingsClient({
     };
   }, [q, status, page, refreshKey, storeId, initial.pageSize]);
 
-  async function archive(id: string, title: string) {
-    if (!window.confirm(`Archive "${title}"?`)) return;
+  async function deleteListing(id: string, title: string) {
+    if (!window.confirm(`Delete product "${title}"?`)) return;
     setError(null);
     const res = await fetch(`/api/listings/${id}`, { method: "DELETE" });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setError(json.error || "Failed to archive listing");
+      setError(json.error || "Failed to delete listing");
       return;
     }
     setRefreshKey((k) => k + 1);
@@ -149,6 +151,7 @@ export function ListingsClient({
                   <th className="px-6 py-3">Supplier price</th>
                   <th className="px-6 py-3">Listed price</th>
                   <th className="px-6 py-3">Margin</th>
+                  <th className="px-6 py-3">Stock</th>
                   <th className="px-6 py-3">Status</th>
                   <th className="px-6 py-3">Variants</th>
                   <th className="px-6 py-3" />
@@ -158,6 +161,7 @@ export function ListingsClient({
                 {data.items.map((l) => {
                   const primary = l.images.find((i) => i.isPrimary) ?? l.images[0];
                   const href = `/stores/${storeId}/listings/${l.id}/edit`;
+                  const stockVal = l.effectiveStock !== undefined ? l.effectiveStock : l.stockQuantity;
                   return (
                     <tr key={l.id} className="transition hover:bg-slate-50/80">
                       <td className="px-6 py-3.5">
@@ -168,7 +172,7 @@ export function ListingsClient({
                               src={primary.url}
                               alt=""
                               className="h-11 w-11 rounded-lg border border-slate-200/80 object-cover shadow-sm"
-                              referrerPolicy="no-referrer"
+                              referrerPolicy={primary.url.startsWith("http") ? "no-referrer" : undefined}
                             />
                           ) : (
                             <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-[11px] text-slate-400">
@@ -187,6 +191,21 @@ export function ListingsClient({
                         {l.listedPrice === null ? "—" : formatMoney(l.listedPrice, storeCurrency)}
                       </td>
                       <td className="px-6 py-3.5 font-medium tabular-nums text-emerald-700">{margin(l)}</td>
+                      <td className="px-6 py-3.5 tabular-nums">
+                        {stockVal === null || stockVal === undefined ? (
+                          <span className="text-slate-400">—</span>
+                        ) : stockVal <= 0 ? (
+                          <span className="inline-flex items-center rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-inset ring-rose-600/20">
+                            Out of stock (0)
+                          </span>
+                        ) : stockVal <= 5 ? (
+                          <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                            Low ({stockVal})
+                          </span>
+                        ) : (
+                          <span className="font-semibold text-slate-800">{stockVal} in stock</span>
+                        )}
+                      </td>
                       <td className="px-6 py-3.5">
                         <Badge status={l.status} />
                       </td>
@@ -201,8 +220,13 @@ export function ListingsClient({
                           >
                             Edit
                           </Link>
-                          <Button size="sm" variant="ghost" onClick={() => archive(l.id, l.title)}>
-                            Archive
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                            onClick={() => deleteListing(l.id, l.title)}
+                          >
+                            Delete
                           </Button>
                         </div>
                       </td>

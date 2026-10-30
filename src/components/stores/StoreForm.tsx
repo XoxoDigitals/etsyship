@@ -13,13 +13,21 @@ export function StoreForm({
   storeId,
   onDone,
 }: {
-  initial?: Partial<{ name: string; platform: string; currency: string; feePercent: number; notes: string }>;
+  initial?: Partial<{
+    name: string;
+    platform: string;
+    storeType: string;
+    currency: string;
+    feePercent: number;
+    notes: string;
+  }>;
   storeId?: string;
   onDone?: () => void;
 }) {
   const router = useRouter();
   const [name, setName] = useState(initial?.name ?? "");
   const [platform, setPlatform] = useState(initial?.platform ?? "ETSY");
+  const [storeType, setStoreType] = useState(initial?.storeType ?? "DROPSHIP");
   const [currency, setCurrency] = useState(initial?.currency ?? "USD");
   const [feePercent, setFeePercent] = useState(String(initial?.feePercent ?? 0));
   const [notes, setNotes] = useState(initial?.notes ?? "");
@@ -33,7 +41,7 @@ export function StoreForm({
     const res = await fetch(storeId ? `/api/stores/${storeId}` : "/api/stores", {
       method: storeId ? "PATCH" : "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, platform, currency, feePercent: Number(feePercent), notes }),
+      body: JSON.stringify({ name, platform, storeType, currency, feePercent: Number(feePercent), notes }),
     });
     const data = await res.json();
     setLoading(false);
@@ -62,6 +70,12 @@ export function StoreForm({
               <option value="EBAY">eBay</option>
               <option value="SHOPIFY">Shopify</option>
               <option value="OTHER">Other</option>
+            </Select>
+          </Field>
+          <Field label="Store Type" hint="Dropship (buy from supplier per order) or Own Stock (track inventory quantities)">
+            <Select value={storeType} onChange={(e) => setStoreType(e.target.value)}>
+              <option value="DROPSHIP">Dropship</option>
+              <option value="OWN_STOCK">Own Stock (Inventory tracked)</option>
             </Select>
           </Field>
           <Field label="Selling currency">

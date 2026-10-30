@@ -21,6 +21,11 @@ enum Platform {
   OTHER
 }
 
+enum StoreType {
+  DROPSHIP
+  OWN_STOCK
+}
+
 enum Currency {
   USD
   GBP
@@ -96,6 +101,7 @@ model Store {
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
   platform  Platform  @default(ETSY)
+  storeType StoreType @default(DROPSHIP)
   currency  Currency  @default(USD) // the currency this store sells in
   // Default marketplace/payment fee percent applied in profit calc (e.g. 6.5 for Etsy)
   feePercent Decimal  @default(0) @db.Decimal(5, 2)
@@ -145,6 +151,7 @@ model Listing {
   supplierCurrency Currency   @default(USD)
   // Our listed selling price, in the store currency
   listedPrice   Decimal?      @db.Decimal(12, 2)
+  stockQuantity Int?
   status        ListingStatus @default(ACTIVE)
   fetchStatus   FetchStatus   @default(FAILED) // how the import went
   archived      Boolean       @default(false)
@@ -179,6 +186,7 @@ model ListingVariant {
   supplierPrice Decimal? @db.Decimal(12, 2)
   // Suggested selling price for this variant, in store currency (optional override)
   listedPrice   Decimal? @db.Decimal(12, 2)
+  stockQuantity Int?
   position      Int      @default(0)
 
   orderItems OrderItem[]

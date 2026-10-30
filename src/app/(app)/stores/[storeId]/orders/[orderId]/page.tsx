@@ -53,6 +53,10 @@ export default async function OrderPage({ params }: { params: Promise<{ storeId:
         select: {
           id: true,
           title: true,
+          supplierUrl: true,
+          supplierName: true,
+          supplierPrice: true,
+          supplierCurrency: true,
           suppliers: { where: { archived: false }, orderBy: [{ isDefault: "desc" }, { position: "asc" }] },
         },
       })
@@ -60,26 +64,42 @@ export default async function OrderPage({ params }: { params: Promise<{ storeId:
 
   // Resolve FX rates (supplier currency → store currency) once each.
   const currencies = new Set<string>();
-  for (const l of listingsWithSuppliers) for (const s of l.suppliers) currencies.add(s.currency);
+  for (const l of listingsWithSuppliers) {
+    currencies.add(l.supplierCurrency);
+    for (const s of l.suppliers) currencies.add(s.currency);
+  }
   const rateMap = new Map<string, number>();
   for (const c of currencies) {
     const { rate } = await getRate(c as Currency, store.currency);
     rateMap.set(c, Number(rate));
   }
 
-  const supplierGroups: SupplierGroup[] = listingsWithSuppliers
-    .filter((l) => l.suppliers.length)
-    .map((l) => ({
+  const supplierGroups: SupplierGroup[] = listingsWithSuppliers.map((l) => {
+    const rawSuppliers =
+      l.suppliers.length > 0
+        ? l.suppliers
+        : [
+            {
+              id: `legacy-${l.id}`,
+              name: l.supplierName || "Supplier",
+              url: l.supplierUrl,
+              unitPrice: l.supplierPrice,
+              currency: l.supplierCurrency,
+              shipDaysUS: null,
+              shipDaysUK: null,
+            },
+          ];
+    return {
       listingId: l.id,
       listingTitle: l.title,
       suppliers: rankSuppliers(
-        l.suppliers.map((s) => {
+        rawSuppliers.map((s) => {
           const unit = s.unitPrice == null ? null : Number(s.unitPrice);
           const rate = rateMap.get(s.currency) ?? 1;
           return {
             id: s.id,
             name: s.name,
-            url: s.url,
+            url: s.url || l.supplierUrl || null,
             unitPrice: unit,
             currency: s.currency,
             landedPrice: unit == null ? null : Math.round(unit * rate * 100) / 100,
@@ -88,7 +108,8 @@ export default async function OrderPage({ params }: { params: Promise<{ storeId:
           };
         })
       ),
-    }));
+    };
+  });
 
   const data: OrderDetailData = {
     id: order.id,
@@ -118,6 +139,7 @@ export default async function OrderPage({ params }: { params: Promise<{ storeId:
     purchases: order.purchases.map((p) => ({
       id: p.id,
       supplierAccountId: p.supplierAccountId,
+      listingSupplierId: p.listingSupplierId,
       supplierAccount: p.supplierAccount,
       supplierOrderNo: p.supplierOrderNo,
       buyingPrice: money(p.buyingPrice),

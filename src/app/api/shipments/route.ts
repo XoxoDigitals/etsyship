@@ -14,12 +14,15 @@ export const POST = handle(async (req: Request) => {
 
   const trackingNumber = body.trackingNumber.trim();
   const requested = body.carrierCode?.trim().toLowerCase();
+  const detected = detectCarrier(trackingNumber);
   const carrierCode =
-    body.kind === "SUPPLIER"
-      ? "cainiao"
-      : requested && requested !== "auto"
-        ? requested
-        : detectCarrier(trackingNumber);
+    requested && requested !== "auto"
+      ? requested
+      : body.kind === "SUPPLIER"
+        ? detected === "other"
+          ? "cainiao"
+          : detected
+        : detected;
 
   const shipment = await prisma.shipment.upsert({
     where: { orderId_kind_trackingNumber: { orderId: order.id, kind: body.kind, trackingNumber } },

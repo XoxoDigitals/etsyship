@@ -37,16 +37,28 @@ export const GET = handle(async (req: Request) => {
       take: pageSize,
       include: {
         images: { orderBy: { position: "asc" } },
+        variants: { select: { id: true, stockQuantity: true } },
         _count: { select: { variants: true } },
       },
     }),
   ]);
 
-  const items = rows.map((l) => ({
-    ...l,
-    supplierPrice: num(l.supplierPrice),
-    listedPrice: num(l.listedPrice),
-  }));
+  const items = rows.map((l) => {
+    const variantStockValues = l.variants
+      .map((v) => v.stockQuantity)
+      .filter((q): q is number => typeof q === "number");
+    const effectiveStock =
+      variantStockValues.length > 0
+        ? variantStockValues.reduce((a, b) => a + b, 0)
+        : l.stockQuantity;
+    return {
+      ...l,
+      stockQuantity: l.stockQuantity,
+      effectiveStock,
+      supplierPrice: num(l.supplierPrice),
+      listedPrice: num(l.listedPrice),
+    };
+  });
 
   return ok({ items, total, page, pageSize });
 });
@@ -90,6 +102,7 @@ export const POST = handle(async (req: Request) => {
       supplierPrice: def.unitPrice ?? null,
       supplierCurrency: def.currency,
       listedPrice: input.listedPrice ?? null,
+      stockQuantity: input.stockQuantity ?? null,
       status: input.status,
       fetchStatus,
       suppliers: {
@@ -115,6 +128,7 @@ export const POST = handle(async (req: Request) => {
           imageUrl: v.imageUrl || null,
           supplierPrice: v.supplierPrice ?? null,
           listedPrice: v.listedPrice ?? null,
+          stockQuantity: v.stockQuantity ?? null,
           position: i,
         })),
       },

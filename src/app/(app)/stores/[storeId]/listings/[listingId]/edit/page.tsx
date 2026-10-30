@@ -42,6 +42,7 @@ export default async function EditListingPage({
     supplierPrice: n(listing.supplierPrice),
     supplierCurrency: listing.supplierCurrency,
     listedPrice: n(listing.listedPrice),
+    stockQuantity: listing.stockQuantity,
     status: listing.status,
     fetchStatus: listing.fetchStatus,
     images: listing.images.map((i) => i.url),
@@ -52,6 +53,7 @@ export default async function EditListingPage({
       imageUrl: v.imageUrl,
       supplierPrice: n(v.supplierPrice),
       listedPrice: n(v.listedPrice),
+      stockQuantity: v.stockQuantity,
     })),
     suppliers: listing.suppliers.map((s) => ({
       id: s.id,
@@ -74,7 +76,7 @@ export default async function EditListingPage({
         </Link>
         <h1 className="mt-1 text-2xl font-semibold text-slate-900">Edit listing</h1>
       </div>
-      <ListingForm storeId={store.id} storeCurrency={store.currency} initial={initial} />
+      <ListingForm storeId={store.id} storeCurrency={store.currency} storeType={store.storeType} initial={initial} />
     </div>
   );
 }

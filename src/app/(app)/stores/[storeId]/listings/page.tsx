@@ -28,21 +28,33 @@ export default async function ListingsPage({ params }: { params: Promise<{ store
       take: PAGE_SIZE,
       include: {
         images: { orderBy: { position: "asc" } },
+        variants: { select: { id: true, stockQuantity: true } },
         _count: { select: { variants: true } },
       },
     }),
   ]);
 
-  const items = rows.map((l) => ({
-    id: l.id,
-    title: l.title,
-    status: l.status,
-    supplierCurrency: l.supplierCurrency,
-    supplierPrice: l.supplierPrice === null ? null : money(l.supplierPrice),
-    listedPrice: l.listedPrice === null ? null : money(l.listedPrice),
-    images: l.images.map((i) => ({ id: i.id, url: i.url, isPrimary: i.isPrimary })),
-    _count: { variants: l._count.variants },
-  }));
+  const items = rows.map((l) => {
+    const variantStockValues = l.variants
+      .map((v) => v.stockQuantity)
+      .filter((q): q is number => typeof q === "number");
+    const effectiveStock =
+      variantStockValues.length > 0
+        ? variantStockValues.reduce((a, b) => a + b, 0)
+        : l.stockQuantity;
+    return {
+      id: l.id,
+      title: l.title,
+      status: l.status,
+      supplierCurrency: l.supplierCurrency,
+      supplierPrice: l.supplierPrice === null ? null : money(l.supplierPrice),
+      listedPrice: l.listedPrice === null ? null : money(l.listedPrice),
+      stockQuantity: l.stockQuantity,
+      effectiveStock,
+      images: l.images.map((i) => ({ id: i.id, url: i.url, isPrimary: i.isPrimary })),
+      _count: { variants: l._count.variants },
+    };
+  });
 
   return (
     <div className="space-y-6">

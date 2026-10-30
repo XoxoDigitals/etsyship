@@ -6,6 +6,7 @@ import { orderSchema, orderStatusEnum } from "@/lib/validation";
 import { audit, orderEvent } from "@/lib/audit";
 import { genOrderNumber } from "@/lib/utils";
 import { money } from "@/lib/money";
+import { adjustInventoryForItems } from "@/lib/stock";
 
 export const dynamic = "force-dynamic";
 
@@ -156,6 +157,7 @@ export const POST = handle(async (req: Request) => {
     include: { items: true },
   });
 
+  await adjustInventoryForItems(body.items, -1);
   await orderEvent(order.id, "CREATED", "Order created");
   await audit({ userId, action: "CREATE", entity: "Order", entityId: order.id, meta: { orderNumber } });
 

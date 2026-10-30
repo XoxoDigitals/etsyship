@@ -79,12 +79,14 @@ export const PATCH = handle(async (req: Request, { params }: Ctx) => {
       if (input.variants.length > 0) {
         await tx.listingVariant.createMany({
           data: input.variants.map((v, i) => ({
+            ...(v.id ? { id: v.id } : {}),
             listingId: existing.id,
             name: v.name,
             sku: v.sku || null,
             imageUrl: v.imageUrl || null,
             supplierPrice: v.supplierPrice ?? null,
             listedPrice: v.listedPrice ?? null,
+            stockQuantity: v.stockQuantity ?? null,
             position: i,
           })),
         });
@@ -128,6 +130,7 @@ export const PATCH = handle(async (req: Request, { params }: Ctx) => {
         ...(input.supplierPrice !== undefined && { supplierPrice: input.supplierPrice }),
         ...(input.supplierCurrency !== undefined && { supplierCurrency: input.supplierCurrency }),
         ...(input.listedPrice !== undefined && { listedPrice: input.listedPrice }),
+        ...(input.stockQuantity !== undefined && { stockQuantity: input.stockQuantity }),
         ...(input.status !== undefined && { status: input.status }),
         ...(fetchStatus !== undefined && { fetchStatus }),
       },
@@ -147,10 +150,6 @@ export const DELETE = handle(async (_req: Request, { params }: Ctx) => {
   const { listingId } = await params;
   const userId = await requireUserId();
   const listing = await loadOwned(listingId, userId);
-  // Soft-archive to preserve order history references.
-  await prisma.listing.update({
-    where: { id: listing.id },
-    data: { archived: true, status: "ARCHIVED" },
-  });
-  return ok({ id: listing.id, archived: true });
+  await prisma.listing.delete({ where: { id: listing.id } });
+  return ok({ id: listing.id, deleted: true });
 });

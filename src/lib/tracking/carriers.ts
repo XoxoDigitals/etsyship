@@ -13,7 +13,7 @@ import { cainiaoProvider } from "./cainiao";
  *   3. Optional aggregator overrides (AfterShip or TrackingMore) if configured in Settings.
  */
 
-export type CarrierCode = "fedex" | "usps" | "ups" | "other";
+export type CarrierCode = "fedex" | "usps" | "ups" | "dhl" | "cainiao" | "other";
 export type CarrierSlug = CarrierCode;
 
 export interface TrackingConfig {
@@ -25,19 +25,40 @@ export const CARRIER_NAMES: Record<CarrierCode, string> = {
   fedex: "FedEx",
   usps: "USPS",
   ups: "UPS",
+  dhl: "DHL",
+  cainiao: "Cainiao",
   other: "Carrier",
+};
+
+const PKGE_COURIER_IDS: Partial<Record<CarrierCode, number>> = {
+  usps: 1,
+  fedex: 9,
+  dhl: 10,
+  cainiao: 14,
+  ups: 17,
 };
 
 export function detectCarrier(trackingNumber: string, hint?: string | null): CarrierCode {
   const h = hint?.toLowerCase().trim();
-  if (h === "usps" || h === "ups" || h === "fedex") return h;
+  if (h === "usps" || h === "ups" || h === "fedex" || h === "dhl" || h === "cainiao") return h;
   const tn = trackingNumber.replace(/\s+/g, "").toUpperCase();
-  if (/^1Z[0-9A-Z]{16}$/.test(tn)) return "ups";
-  if (/^(94|93|92|95)\d{18,24}$/.test(tn) || /^[A-Z]{2}\d{9}US$/.test(tn) || /^420\d{25,31}$/.test(tn)) {
+  if (/^1Z[0-9A-Z]{16}$/.test(tn) || /^T\d{10}$/.test(tn) || /^\d{9}$/.test(tn)) return "ups";
+  if (
+    /^(94|93|92|95|91)\d{18,24}$/.test(tn) ||
+    /^[A-Z]{2}\d{9}US$/.test(tn) ||
+    /^420\d{23,31}$/.test(tn) ||
+    /^82\d{8}$/.test(tn)
+  ) {
     return "usps";
   }
   if (/^\d{12}$/.test(tn) || /^\d{15}$/.test(tn) || /^\d{20}$/.test(tn) || /^\d{22}$/.test(tn)) {
     return "fedex";
+  }
+  if (/^(LP|CN|CAINIAO|1MCAIN)/i.test(tn)) {
+    return "cainiao";
+  }
+  if (/^\d{10}$/.test(tn) || /^JJD\d{10,20}$/.test(tn) || /^GM\d{16,20}$/.test(tn)) {
+    return "dhl";
   }
   return "other";
 }
@@ -56,6 +77,10 @@ export function carrierDeepLink(trackingNumber: string, slug?: CarrierCode | str
       return `https://www.ups.com/track?loc=en_US&tracknum=${q}`;
     case "fedex":
       return `https://www.fedex.com/fedextrack/?trknbr=${q}`;
+    case "dhl":
+      return `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${q}`;
+    case "cainiao":
+      return `https://global.cainiao.com/newDetail.htm?mailNoList=${q}`;
     default:
       return `https://www.google.com/search?q=${q}`;
   }
@@ -159,25 +184,210 @@ function mapPkgeNumericStatus(code: number | undefined, text: string | undefined
 }
 
 async function fetchPkgeKeyless(trackingNumber: string, slug: CarrierCode): Promise<NormalizedResult> {
-  const tn = trackingNumber.trim();
+  const tn = trackingNumber.replace(/\s+/g, "").trim();
   const pageUrl = `https://pkge.net/parcel/${encodeURIComponent(tn)}`;
-
-  const fetchParcelFromPage = async (): Promise<any | null> => {
-    const res = await fetch(pageUrl, {
-      headers: {
-        "user-agent": BROWSER_UA,
-        "accept-language": "en-US,en;q=0.9",
-      },
-      signal: AbortSignal.timeout(12000),
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    const m = /new\s+parcelView\("([^"]+)"\)/.exec(html);
-    if (!m?.[1]) return null;
-    return decryptPkgePayload(m[1]);
+  const apiHeaders = {
+    "user-agent": BROWSER_UA,
+    "accept-language": "en",
+    "x-api-widget-key": PKGE_WIDGET_KEY,
+    "x-api-expand-related-objects": "true",
+    origin: "https://pkge.net",
+    referer: pageUrl,
   };
 
-  let parcel = await fetchParcelFromPage();
+  const hasRealCheckpoints = (p: any) =>
+    Array.isArray(p?.checkpoints) &&
+    p.checkpoints.some((c: any) => c?.id && !/may not have been sent yet/i.test(String(c?.location || "")));
+
+  // Determine preferred Pkge courierId (1=USPS, 9=FedEx, 10=DHL, 14=Cainiao, 17=UPS)
+  let courierId = PKGE_COURIER_IDS[slug];
+  if (!courierId) {
+    try {
+      const detRes = await fetch(`https://api.pkge.net/v1/couriers/detect?trackNumber=${encodeURIComponent(tn)}`, {
+        headers: apiHeaders,
+        signal: AbortSignal.timeout(6000),
+      });
+      if (detRes.ok) {
+        const detJson = await detRes.json();
+        const detectedList = detJson?.payload ? decryptPkgePayload(detJson.payload) : detJson;
+        if (Array.isArray(detectedList) && detectedList.length > 0) {
+          const preferred =
+            detectedList.find((c: any) => ["usps", "ups", "fedex", "dhl", "cainiao"].includes(c?.slug)) ??
+            detectedList[0];
+          if (preferred?.id) courierId = Number(preferred.id);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let parcel: any | null = null;
+
+  // 1. Query pure JSON API GET /v1/packages first (works on datacenter IPs without Cloudflare HTML challenge)
+  try {
+    const getRes = await fetch(`https://api.pkge.net/v1/packages?trackNumber=${encodeURIComponent(tn)}`, {
+      headers: apiHeaders,
+      signal: AbortSignal.timeout(8000),
+    });
+    if (getRes.ok) {
+      const getJson = await getRes.json();
+      if (getJson?.payload) {
+        parcel = decryptPkgePayload(getJson.payload);
+      }
+    } else if (getRes.status === 404 && courierId) {
+      // Package not yet registered in Pkge -> register with explicit courierId so USPS is never misclassified as Pitney Bowes
+      const createRes = await fetch(
+        `https://api.pkge.net/v1/packages?trackNumber=${encodeURIComponent(tn)}&courierId=${courierId}`,
+        {
+          method: "POST",
+          headers: apiHeaders,
+          signal: AbortSignal.timeout(8000),
+        }
+      );
+      if (createRes.ok) {
+        const createJson = await createRes.json();
+        if (createJson?.payload) {
+          parcel = decryptPkgePayload(createJson.payload);
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Fallback to HTML page extraction if API GET didn't return a parcel
+  const fetchParcelFromPage = async (): Promise<any | null> => {
+    try {
+      const res = await fetch(pageUrl, {
+        headers: {
+          "user-agent": BROWSER_UA,
+          "accept-language": "en-US,en;q=0.9",
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) return null;
+      const html = await res.text();
+      const m = /new\s+parcelView\("([^"]+)"\)/.exec(html);
+      if (!m?.[1]) return null;
+      return decryptPkgePayload(m[1]);
+    } catch {
+      return null;
+    }
+  };
+
+  if (!parcel) {
+    parcel = await fetchParcelFromPage();
+  }
+
+  // If still no parcel, try detect-courier POST on pkge.net web + re-fetch
+  if (!parcel) {
+    try {
+      await fetch(
+        `https://pkge.net/parcels/detect-courier?trackNumber=${encodeURIComponent(tn)}${courierId ? `&preferredId=${courierId}` : ""}`,
+        {
+          method: "POST",
+          headers: {
+            "user-agent": BROWSER_UA,
+            "x-requested-with": "XMLHttpRequest",
+            origin: "https://pkge.net",
+            referer: "https://pkge.net/",
+          },
+          signal: AbortSignal.timeout(8000),
+        }
+      );
+      parcel = await fetchParcelFromPage();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // If parcel was misclassified (e.g. Pitney Bowes instead of USPS) and has no real checkpoints, switch courier
+  if (
+    parcel &&
+    !hasRealCheckpoints(parcel) &&
+    courierId &&
+    parcel.courier?.id &&
+    Number(parcel.courier.id) !== courierId
+  ) {
+    try {
+      await fetch(`https://pkge.net/parcels/change-courier?trackNumber=${encodeURIComponent(tn)}`, {
+        method: "POST",
+        headers: {
+          "user-agent": BROWSER_UA,
+          "content-type": "application/x-www-form-urlencoded",
+          "x-requested-with": "XMLHttpRequest",
+          origin: "https://pkge.net",
+          referer: pageUrl,
+        },
+        body: `courierId=${encodeURIComponent(String(courierId))}`,
+        signal: AbortSignal.timeout(6000),
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Trigger a live carrier refresh and poll updating-status
+  if (!parcel || !hasRealCheckpoints(parcel) || parcel.updating) {
+    try {
+      await fetch(`https://api.pkge.net/v1/packages/update?trackNumber=${encodeURIComponent(tn)}`, {
+        method: "POST",
+        headers: apiHeaders,
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch {
+      /* ignore */
+    }
+
+    for (let poll = 0; poll < 7; poll++) {
+      await new Promise((r) => setTimeout(r, 1800));
+      try {
+        const pollRes = await fetch(
+          `https://api.pkge.net/v1/packages/updating-status?trackNumber=${encodeURIComponent(tn)}&hash=${encodeURIComponent(parcel?.hash || "")}`,
+          {
+            headers: apiHeaders,
+            signal: AbortSignal.timeout(8000),
+          }
+        );
+        if (pollRes.ok) {
+          const pollJson = await pollRes.json();
+          const dec = pollJson?.payload ? decryptPkgePayload(pollJson.payload) : null;
+          // IMPORTANT: updating-status returns the updated parcel under `dec.package` (or `dec.parcel`)
+          const updatedPkg = dec?.package ?? dec?.parcel;
+          if (updatedPkg) {
+            parcel = updatedPkg;
+          }
+          if (dec && !dec.updating && hasRealCheckpoints(parcel)) break;
+          if (dec && !dec.updating && poll >= 1) break;
+        }
+      } catch {
+        break;
+      }
+    }
+  } else {
+    // Even if parcel already had checkpoints, do a fast check on updating-status with empty hash to get latest state
+    try {
+      const latestRes = await fetch(
+        `https://api.pkge.net/v1/packages/updating-status?trackNumber=${encodeURIComponent(tn)}&hash=`,
+        {
+          headers: apiHeaders,
+          signal: AbortSignal.timeout(6000),
+        }
+      );
+      if (latestRes.ok) {
+        const latestJson = await latestRes.json();
+        const dec = latestJson?.payload ? decryptPkgePayload(latestJson.payload) : null;
+        const updatedPkg = dec?.package ?? dec?.parcel;
+        if (updatedPkg && Array.isArray(updatedPkg.checkpoints) && updatedPkg.checkpoints.length >= (parcel.checkpoints?.length || 0)) {
+          parcel = updatedPkg;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   if (!parcel) {
     return {
       found: false,
@@ -189,71 +399,12 @@ async function fetchPkgeKeyless(trackingNumber: string, slug: CarrierCode): Prom
     };
   }
 
-  const hasRealCheckpoints = (p: any) =>
-    Array.isArray(p?.checkpoints) &&
-    p.checkpoints.some((c: any) => c?.id && !/may not have been sent yet/i.test(String(c?.location || "")));
-
-  // Trigger a live carrier refresh if package was never tracked or has no real checkpoints yet
-  if (!hasRealCheckpoints(parcel) || parcel.updating) {
-    try {
-      await fetch(`https://api.pkge.net/v1/packages/update?trackNumber=${encodeURIComponent(tn)}`, {
-        method: "POST",
-        headers: {
-          "user-agent": BROWSER_UA,
-          "accept-language": "en",
-          "x-api-widget-key": PKGE_WIDGET_KEY,
-          "x-api-expand-related-objects": "true",
-          origin: "https://pkge.net",
-          referer: pageUrl,
-        },
-        signal: AbortSignal.timeout(8000),
-      });
-    } catch {
-      /* ignore */
-    }
-
-    for (let poll = 0; poll < 6; poll++) {
-      await new Promise((r) => setTimeout(r, 2000));
-      try {
-        const pollRes = await fetch(
-          `https://api.pkge.net/v1/packages/updating-status?trackNumber=${encodeURIComponent(tn)}&hash=${encodeURIComponent(parcel.hash || "")}`,
-          {
-            headers: {
-              "user-agent": BROWSER_UA,
-              "accept-language": "en",
-              "x-api-widget-key": PKGE_WIDGET_KEY,
-              "x-api-expand-related-objects": "true",
-              origin: "https://pkge.net",
-              referer: pageUrl,
-            },
-            signal: AbortSignal.timeout(8000),
-          }
-        );
-        if (pollRes.ok) {
-          const pollJson = await pollRes.json();
-          const dec = pollJson?.payload ? decryptPkgePayload(pollJson.payload) : null;
-          if (dec?.parcel) {
-            parcel = dec.parcel;
-          }
-          if (dec && !dec.updating) break;
-        }
-      } catch {
-        break;
-      }
-    }
-
-    if (!hasRealCheckpoints(parcel)) {
-      const refreshed = await fetchParcelFromPage();
-      if (refreshed) parcel = refreshed;
-    }
-  }
-
   const rawCheckpoints: any[] = Array.isArray(parcel?.checkpoints) ? parcel.checkpoints : [];
   const events: NormalizedEvent[] = [];
   for (const cp of rawCheckpoints) {
     const desc = String(cp?.title || "").trim();
     const loc = String(cp?.location || "").trim();
-    if (!desc || /may not have been sent yet/i.test(loc)) continue;
+    if (!desc || /may not have been sent yet/i.test(loc) || /tracking has started/i.test(desc)) continue;
     const t = safeDate(cp?.date);
     if (!t) continue;
     events.push({
@@ -264,8 +415,19 @@ async function fetchPkgeKeyless(trackingNumber: string, slug: CarrierCode): Prom
     });
   }
 
-  const statusText = String(parcel?.last_status || parcel?.status_description || events[0]?.description || "");
-  const status = events.length > 0 ? mapPkgeNumericStatus(parcel?.status, statusText) : "PENDING";
+  // Sort events newest first so events[0] is always the most recent checkpoint
+  events.sort((a, b) => b.time.getTime() - a.time.getTime());
+
+  const latestEventDesc = events[0]?.description || "";
+  const statusText = String(latestEventDesc || parcel?.last_status || parcel?.status_description || "");
+  let status = events.length > 0 ? mapPkgeNumericStatus(parcel?.status, statusText) : "PENDING";
+  // If any checkpoint explicitly indicates DELIVERED, or the newest event is OUT_FOR_DELIVERY, reflect that accurately
+  if (events.some((e) => e.status === "DELIVERED")) {
+    status = "DELIVERED";
+  } else if (events[0]?.status === "OUT_FOR_DELIVERY" && status === "IN_TRANSIT") {
+    status = "OUT_FOR_DELIVERY";
+  }
+
   const delivered = status === "DELIVERED";
   const estimatedDelivery = safeDate(parcel?.est_delivery_date_from || parcel?.est_delivery_date_to);
   const detectedCourierName = parcel?.courier?.name || carrierDisplayName(slug);

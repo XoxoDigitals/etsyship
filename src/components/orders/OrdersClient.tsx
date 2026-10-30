@@ -125,6 +125,43 @@ export function OrdersClient({
 
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
 
+  async function refundOrder(id: string, orderNumber: string) {
+    if (!window.confirm(`Mark order "${orderNumber}" as REFUNDED?`)) return;
+    setError(null);
+    try {
+      const res = await fetch(`/api/orders/${id}/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "REFUNDED" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Failed to refund order");
+      setData((prev) => ({
+        ...prev,
+        items: prev.items.map((o) => (o.id === id ? { ...o, status: "REFUNDED" } : o)),
+      }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to refund order");
+    }
+  }
+
+  async function deleteOrder(id: string, orderNumber: string) {
+    if (!window.confirm(`Permanently delete order "${orderNumber}"?`)) return;
+    setError(null);
+    try {
+      const res = await fetch(`/api/orders/${id}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Failed to delete order");
+      setData((prev) => ({
+        ...prev,
+        total: Math.max(0, prev.total - 1),
+        items: prev.items.filter((o) => o.id !== id),
+      }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete order");
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row">
@@ -173,6 +210,7 @@ export function OrdersClient({
                   <th className="px-6 py-3 text-right">Revenue</th>
                   <th className="px-6 py-3">Supplier Tracking</th>
                   <th className="px-6 py-3">Buyer Tracking</th>
+                  <th className="px-6 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -196,6 +234,34 @@ export function OrdersClient({
                     </td>
                     <td className="px-6 py-3.5">{shipmentStatusByKind(o, "SUPPLIER")}</td>
                     <td className="px-6 py-3.5">{shipmentStatusByKind(o, "CUSTOMER")}</td>
+                    <td className="whitespace-nowrap px-6 py-3.5 text-right">
+                      <div className="flex justify-end gap-1.5">
+                        <Link
+                          href={`/stores/${storeId}/orders/${o.id}`}
+                          className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+                        >
+                          View / Edit
+                        </Link>
+                        {o.status !== "REFUNDED" && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+                            onClick={() => refundOrder(o.id, o.orderNumber)}
+                          >
+                            Refund
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                          onClick={() => deleteOrder(o.id, o.orderNumber)}
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>

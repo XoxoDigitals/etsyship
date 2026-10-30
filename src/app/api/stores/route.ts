@@ -24,6 +24,7 @@ export const POST = handle(async (req: Request) => {
       userId,
       name: input.name,
       platform: input.platform,
+      storeType: input.storeType,
       currency: input.currency,
       feePercent: input.feePercent,
       notes: input.notes ?? null,

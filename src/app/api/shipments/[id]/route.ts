@@ -59,14 +59,21 @@ export const PATCH = handle(async (req: Request, { params }: { params: Promise<{
     },
   });
 
-  // Delivered customer parcel nudges the order forward.
-  if (delivered && existing.kind === "CUSTOMER") {
-    await prisma.order
+  // Delivered supplier or customer parcel marks the order as DELIVERED.
+  if (delivered && (existing.kind === "CUSTOMER" || existing.kind === "SUPPLIER")) {
+    const res = await prisma.order
       .updateMany({
-        where: { id: existing.orderId, status: { in: ["PROCESSING", "SHIPPED"] } },
+        where: { id: existing.orderId, status: { in: ["NEW", "PROCESSING", "SHIPPED"] } },
         data: { status: "DELIVERED" },
       })
-      .catch(() => void 0);
+      .catch(() => ({ count: 0 }));
+    if (res.count > 0) {
+      await orderEvent(
+        existing.orderId,
+        "STATUS_CHANGE",
+        `Status → DELIVERED (${existing.kind.toLowerCase()} tracking delivered)`
+      ).catch(() => void 0);
+    }
   }
 
   await orderEvent(existing.orderId, "TRACKING_UPDATE", `${existing.kind} ${existing.trackingNumber} → ${label}`);

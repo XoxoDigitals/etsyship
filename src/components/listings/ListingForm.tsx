@@ -16,6 +16,7 @@ export type ListingFormInitial = {
   supplierPrice: number | null;
   supplierCurrency: Cur;
   listedPrice: number | null;
+  stockQuantity?: number | null;
   status: string;
   fetchStatus?: FetchStatus;
   images: string[];
@@ -26,6 +27,7 @@ export type ListingFormInitial = {
     imageUrl: string | null;
     supplierPrice: number | null;
     listedPrice: number | null;
+    stockQuantity?: number | null;
   }[];
   suppliers?: {
     id?: string;
@@ -47,6 +49,7 @@ type VariantState = {
   imageUrl: string;
   supplierPrice: string;
   listedPrice: string;
+  stockQuantity: string;
 };
 
 type SupplierState = {
@@ -124,10 +127,12 @@ function UploadButton({
 export function ListingForm({
   storeId,
   storeCurrency,
+  storeType = "DROPSHIP",
   initial,
 }: {
   storeId: string;
   storeCurrency: Cur;
+  storeType?: string;
   initial?: ListingFormInitial;
 }) {
   const router = useRouter();
@@ -136,6 +141,7 @@ export function ListingForm({
   const [title, setTitle] = useState(initial?.title ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [listedPrice, setListedPrice] = useState(numStr(initial?.listedPrice));
+  const [stockQuantity, setStockQuantity] = useState(numStr(initial?.stockQuantity));
   const [status, setStatus] = useState(initial?.status ?? "ACTIVE");
   const [images, setImages] = useState<string[]>(initial?.images?.length ? initial.images : [""]);
   const [variants, setVariants] = useState<VariantState[]>(
@@ -146,6 +152,7 @@ export function ListingForm({
       imageUrl: v.imageUrl ?? "",
       supplierPrice: numStr(v.supplierPrice),
       listedPrice: numStr(v.listedPrice),
+      stockQuantity: numStr(v.stockQuantity),
     }))
   );
   const [suppliers, setSuppliers] = useState<SupplierState[]>(() => {
@@ -239,6 +246,7 @@ export function ListingForm({
                 ? String(resolvedBasePrice)
                 : "",
           listedPrice: "",
+          stockQuantity: "",
         }))
       );
     }
@@ -379,6 +387,7 @@ export function ListingForm({
         supplierPrice: defSupplierPrice,
         supplierCurrency: defSupplierCurrency,
         listedPrice: toNum(listedPrice),
+        stockQuantity: toInt(stockQuantity),
         status,
         fetchStatus,
         images: images.map((u) => u.trim()).filter(Boolean),
@@ -391,6 +400,7 @@ export function ListingForm({
             imageUrl: v.imageUrl.trim() || null,
             supplierPrice: toNum(v.supplierPrice),
             listedPrice: toNum(v.listedPrice),
+            stockQuantity: toInt(v.stockQuantity),
           })),
         suppliers: supplierPayload,
       };
@@ -602,9 +612,22 @@ export function ListingForm({
           <Field label="Description">
             <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={5} maxLength={10000} />
           </Field>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
             <Field label={`Listed price (${storeCurrency})`} hint="Your selling price, in the store currency">
               <Input type="number" step="0.01" min="0" value={listedPrice} onChange={(e) => setListedPrice(e.target.value)} />
+            </Field>
+            <Field
+              label="Stock quantity"
+              hint={storeType === "OWN_STOCK" ? "Auto-tracked when orders are placed" : "Optional inventory count"}
+            >
+              <Input
+                type="number"
+                step="1"
+                min="0"
+                value={stockQuantity}
+                onChange={(e) => setStockQuantity(e.target.value)}
+                placeholder={storeType === "OWN_STOCK" ? "e.g. 25" : "Unlimited"}
+              />
             </Field>
             <Field label="Status">
               <Select value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -684,7 +707,12 @@ export function ListingForm({
               type="button"
               size="sm"
               variant="secondary"
-              onClick={() => setVariants((vs) => [...vs, { name: "", sku: "", imageUrl: "", supplierPrice: "", listedPrice: "" }])}
+              onClick={() =>
+                setVariants((vs) => [
+                  ...vs,
+                  { name: "", sku: "", imageUrl: "", supplierPrice: "", listedPrice: "", stockQuantity: "" },
+                ])
+              }
               disabled={variants.length >= 100}
             >
               + Add variant
@@ -697,7 +725,7 @@ export function ListingForm({
           )}
           {variants.map((v, i) => (
             <div key={v.id ?? i} className="rounded-lg border border-slate-200 p-3">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-6">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-7">
                 <div className="sm:col-span-2">
                   <Field label="Name">
                     <Input value={v.name} onChange={(e) => updateVariant(i, { name: e.target.value })} placeholder="Red / XL" />
@@ -724,6 +752,16 @@ export function ListingForm({
                     value={v.listedPrice}
                     onChange={(e) => updateVariant(i, { listedPrice: e.target.value })}
                     placeholder={listedPrice}
+                  />
+                </Field>
+                <Field label="Stock">
+                  <Input
+                    type="number"
+                    step="1"
+                    min="0"
+                    value={v.stockQuantity}
+                    onChange={(e) => updateVariant(i, { stockQuantity: e.target.value })}
+                    placeholder={stockQuantity || "∞"}
                   />
                 </Field>
                 <div>
@@ -767,13 +805,42 @@ export function ListingForm({
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      <div className="flex gap-2">
-        <Button type="submit" disabled={saving}>
-          {saving ? "Saving…" : editing ? "Save changes" : "Create listing"}
-        </Button>
-        <Button type="button" variant="secondary" onClick={() => router.push(`/stores/${storeId}/listings`)}>
-          Cancel
-        </Button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex gap-2">
+          <Button type="submit" disabled={saving}>
+            {saving ? "Saving…" : editing ? "Save changes" : "Create listing"}
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => router.push(`/stores/${storeId}/listings`)}>
+            Cancel
+          </Button>
+        </div>
+        {editing && initial?.id && (
+          <Button
+            type="button"
+            variant="danger"
+            disabled={saving}
+            onClick={async () => {
+              if (!window.confirm(`Delete product "${title || initial.title}"?`)) return;
+              setSaving(true);
+              try {
+                const res = await fetch(`/api/listings/${initial.id}`, { method: "DELETE" });
+                if (!res.ok) {
+                  const j = await res.json().catch(() => ({}));
+                  setError(j.error || "Failed to delete product");
+                  setSaving(false);
+                  return;
+                }
+                router.push(`/stores/${storeId}/listings`);
+                router.refresh();
+              } catch {
+                setError("Failed to delete product");
+                setSaving(false);
+              }
+            }}
+          >
+            Delete product
+          </Button>
+        )}
       </div>
     </form>
   );
