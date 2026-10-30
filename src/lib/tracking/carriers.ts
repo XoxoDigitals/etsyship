@@ -448,8 +448,371 @@ async function fetchPkgeKeyless(trackingNumber: string, slug: CarrierCode): Prom
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 // ---------------------------------------------------------------------------
-// 2. Direct Keyless USPS Tracking Scraper Fallback
+// 2A. Keyless USPS / DHL eCommerce Consolidator JSON API (926129..., 927489..., 936128..., 420..., GM...)
 // ---------------------------------------------------------------------------
+/* eslint-disable @typescript-eslint/no-explicit-any */
+async function fetchDhlEcommerceKeyless(trackingNumber: string, slug: CarrierCode): Promise<NormalizedResult> {
+  const tn = trackingNumber.replace(/\s+/g, "").trim();
+  const candidates = [tn];
+  // If 30-digit IMpb barcode starting with 420 + 5/9 digit zip + 92/93/94..., also try the 22-digit USPS tracking number
+  const impbMatch = /^420\d{5}(?:\d{4})?((?:92|93|94|95)\d{20,22})$/.exec(tn);
+  if (impbMatch?.[1]) candidates.push(impbMatch[1]);
+
+  try {
+    const res = await fetch("https://api.dhlecs.com/webtrack/v4/tracking", {
+      method: "POST",
+      headers: {
+        "user-agent": BROWSER_UA,
+        "content-type": "application/json",
+        accept: "application/json",
+        origin: "https://webtrack.dhlglobalmail.com",
+        referer: "https://webtrack.dhlglobalmail.com/",
+      },
+      body: JSON.stringify({ trackedValue: candidates.join(","), offset: 0, locale: "en-US" }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      return {
+        found: false,
+        carrierCode: slug,
+        carrierName: carrierDisplayName(slug),
+        status: "PENDING",
+        delivered: false,
+        events: [],
+      };
+    }
+    const json = await res.json();
+    const pkg = json?.packages?.[0];
+    if (!pkg || !Array.isArray(pkg.events) || pkg.events.length === 0) {
+      return {
+        found: false,
+        carrierCode: slug,
+        carrierName: carrierDisplayName(slug),
+        status: "PENDING",
+        delivered: false,
+        events: [],
+      };
+    }
+
+    const events: NormalizedEvent[] = [];
+    for (const ev of pkg.events) {
+      const primary = String(ev?.primaryEventDescription || "").trim();
+      const secondary = String(ev?.secondaryEventDescription || "").trim();
+      const desc = secondary && !primary.toLowerCase().includes(secondary.toLowerCase())
+        ? `${primary} (${secondary})`
+        : primary;
+      if (!desc) continue;
+      const dateStr = ev?.date && ev?.time ? `${ev.date}T${ev.time}` : ev?.date;
+      const t = safeDate(dateStr) ?? new Date();
+      events.push({
+        time: t,
+        description: desc,
+        location: ev?.location ? String(ev.location).trim() : undefined,
+        status: mapStatusText(primary || desc),
+      });
+    }
+
+    events.sort((a, b) => b.time.getTime() - a.time.getTime());
+
+    const rawStatus = String(pkg.status || events[0]?.description || "");
+    let status = mapStatusText(rawStatus);
+    if (events.some((e) => e.status === "DELIVERED")) {
+      status = "DELIVERED";
+    } else if (events[0]?.status === "OUT_FOR_DELIVERY" && status === "IN_TRANSIT") {
+      status = "OUT_FOR_DELIVERY";
+    }
+
+    const effectiveSlug: CarrierCode =
+      slug !== "other" ? slug : String(pkg.dspName || "").toUpperCase() === "USPS" ? "usps" : "dhl";
+
+    return {
+      found: true,
+      carrierCode: effectiveSlug,
+      carrierName: carrierDisplayName(effectiveSlug),
+      status,
+      statusDetail: events[0]?.description || rawStatus || undefined,
+      estimatedDelivery: safeDate(pkg.estimatedDeliveryDate),
+      delivered: status === "DELIVERED",
+      events,
+      raw: pkg,
+    };
+  } catch {
+    return {
+      found: false,
+      carrierCode: slug,
+      carrierName: carrierDisplayName(slug),
+      status: "PENDING",
+      delivered: false,
+      events: [],
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2B. Keyless Ship24 Universal API (FedEx, UPS, USPS, DHL, Royal Mail, etc.)
+// ---------------------------------------------------------------------------
+function murmurHash3x8632(key: string, seed = 0): number {
+  let h1 = seed >>> 0;
+  const c1 = 0xcc9e2d51;
+  const c2 = 0x1b873593;
+  const imul = Math.imul;
+  const len = key.length;
+  const roundedEnd = len & ~0x3;
+
+  for (let i = 0; i < roundedEnd; i += 4) {
+    let k1 =
+      (key.charCodeAt(i) & 0xff) |
+      ((key.charCodeAt(i + 1) & 0xff) << 8) |
+      ((key.charCodeAt(i + 2) & 0xff) << 16) |
+      ((key.charCodeAt(i + 3) & 0xff) << 24);
+    k1 = imul(k1, c1);
+    k1 = (k1 << 15) | (k1 >>> 17);
+    k1 = imul(k1, c2);
+    h1 ^= k1;
+    h1 = (h1 << 13) | (h1 >>> 19);
+    h1 = (imul(h1, 5) + 0xe6546b64) | 0;
+  }
+
+  let k1 = 0;
+  switch (len & 3) {
+    case 3:
+      k1 ^= (key.charCodeAt(roundedEnd + 2) & 0xff) << 16;
+    // falls through
+    case 2:
+      k1 ^= (key.charCodeAt(roundedEnd + 1) & 0xff) << 8;
+    // falls through
+    case 1:
+      k1 ^= key.charCodeAt(roundedEnd) & 0xff;
+      k1 = imul(k1, c1);
+      k1 = (k1 << 15) | (k1 >>> 17);
+      k1 = imul(k1, c2);
+      h1 ^= k1;
+  }
+
+  h1 ^= len;
+  h1 ^= h1 >>> 16;
+  h1 = imul(h1, 0x85ebca6b);
+  h1 ^= h1 >>> 13;
+  h1 = imul(h1, 0xc2b2ae35);
+  h1 ^= h1 >>> 16;
+  return h1 >>> 0;
+}
+
+function makeShip24Token(): string {
+  const n = crypto
+    .createHash("sha256")
+    .update(`${BROWSER_UA}_1920x1080_en-US_America/New_York`)
+    .digest("hex");
+  const r = murmurHash3x8632(n + "\u1780", 0);
+  const c = String(Date.now());
+  const d = c.slice(3, 10);
+  const msg = `${d}${r}`;
+  const sig = crypto.createHmac("sha256", "qxV6SOr2tqw9m36j0-R-ohPt1PAB2et0").update(msg).digest("hex");
+  return `${c.slice(0, 3)}${sig}${c.slice(3)}`;
+}
+
+async function fetchShip24Keyless(trackingNumber: string, slug: CarrierCode): Promise<NormalizedResult> {
+  const tn = trackingNumber.replace(/\s+/g, "").trim();
+  try {
+    const res = await fetch(`https://api.ship24.com/api/parcels/${encodeURIComponent(tn)}?lang=en`, {
+      method: "POST",
+      headers: {
+        "user-agent": BROWSER_UA,
+        "content-type": "application/json",
+        accept: "application/json, text/plain, */*",
+        "x-ship24-token": makeShip24Token(),
+        origin: "https://www.ship24.com",
+        referer: `https://www.ship24.com/tracking?p=${encodeURIComponent(tn)}`,
+      },
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      return {
+        found: false,
+        carrierCode: slug,
+        carrierName: carrierDisplayName(slug),
+        status: "PENDING",
+        delivered: false,
+        events: [],
+      };
+    }
+    const json = await res.json();
+    const rawEvents: any[] = Array.isArray(json?.data?.events) ? json.data.events : [];
+    if (rawEvents.length === 0) {
+      return {
+        found: false,
+        carrierCode: slug,
+        carrierName: carrierDisplayName(slug),
+        status: "PENDING",
+        delivered: false,
+        events: [],
+      };
+    }
+
+    const events: NormalizedEvent[] = [];
+    for (const ev of rawEvents) {
+      const desc = String(ev?.event || ev?.status || "").trim();
+      if (!desc) continue;
+      const t = safeDate(ev?.datetime || ev?.occurrenceDatetime) ?? new Date();
+      events.push({
+        time: t,
+        description: desc,
+        location: ev?.location ? String(ev.location).trim() : undefined,
+        status: mapStatusText(ev?.statusCode || ev?.statusCategory || desc),
+      });
+    }
+
+    events.sort((a, b) => b.time.getTime() - a.time.getTime());
+
+    let status = mapStatusText(events[0]?.description);
+    if (events.some((e) => e.status === "DELIVERED")) {
+      status = "DELIVERED";
+    } else if (events[0]?.status === "OUT_FOR_DELIVERY" && status === "IN_TRANSIT") {
+      status = "OUT_FOR_DELIVERY";
+    }
+
+    return {
+      found: events.length > 0,
+      carrierCode: slug,
+      carrierName: carrierDisplayName(slug),
+      status,
+      statusDetail: events[0]?.description || undefined,
+      delivered: status === "DELIVERED",
+      events,
+      raw: json?.data,
+    };
+  } catch {
+    return {
+      found: false,
+      carrierCode: slug,
+      carrierName: carrierDisplayName(slug),
+      status: "PENDING",
+      delivered: false,
+      events: [],
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2C. Keyless PackageRadar SSR Tracker (UPS, USPS, FedEx, DHL)
+// ---------------------------------------------------------------------------
+const PACKAGERADAR_SLUGS: Partial<Record<CarrierCode, string>> = {
+  ups: "ups",
+  usps: "usps",
+  fedex: "fedex",
+  dhl: "dhl",
+  cainiao: "cainiao",
+};
+
+async function fetchPackageRadarKeyless(trackingNumber: string, slug: CarrierCode): Promise<NormalizedResult> {
+  const tn = trackingNumber.replace(/\s+/g, "").trim();
+  const courierPath = PACKAGERADAR_SLUGS[slug] || "usps";
+  try {
+    const res = await fetch(`https://packageradar.com/courier/${courierPath}/tracking/${encodeURIComponent(tn)}`, {
+      headers: {
+        "user-agent": BROWSER_UA,
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      return {
+        found: false,
+        carrierCode: slug,
+        carrierName: carrierDisplayName(slug),
+        status: "PENDING",
+        delivered: false,
+        events: [],
+      };
+    }
+    const html = await res.text();
+    const ulMatch = /<ul class="checkpoints">([\s\S]*?)<\/ul>/i.exec(html);
+    if (!ulMatch?.[1]) {
+      return {
+        found: false,
+        carrierCode: slug,
+        carrierName: carrierDisplayName(slug),
+        status: "PENDING",
+        delivered: false,
+        events: [],
+      };
+    }
+
+    const strip = (s: string) =>
+      s
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/gi, " ")
+        .replace(/&amp;/gi, "&")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const events: NormalizedEvent[] = [];
+    const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = liRegex.exec(ulMatch[1])) !== null) {
+      const block = m[1];
+      const dtMatch = /datetime="([^"]+)"/i.exec(block);
+      const statusMatch = /class="[^"]*checkpoint-status[^"]*"[^>]*>([\s\S]*?)<\/span>/i.exec(block);
+      const locMatch = /<em class="text-muted">([\s\S]*?)<\/em>/i.exec(block);
+      const desc = statusMatch ? strip(statusMatch[1]) : "";
+      if (!desc || /package may not have been sent yet/i.test(desc)) continue;
+      const t = dtMatch?.[1] ? safeDate(dtMatch[1]) : null;
+      if (!t) continue;
+      events.push({
+        time: t,
+        description: desc,
+        location: locMatch ? strip(locMatch[1]) || undefined : undefined,
+        status: mapStatusText(desc),
+      });
+    }
+
+    if (events.length === 0) {
+      return {
+        found: false,
+        carrierCode: slug,
+        carrierName: carrierDisplayName(slug),
+        status: "PENDING",
+        delivered: false,
+        events: [],
+      };
+    }
+
+    events.sort((a, b) => b.time.getTime() - a.time.getTime());
+
+    let status: ShipmentStatus = mapStatusText(events[0].description);
+    if (events.some((e) => e.status === "DELIVERED")) {
+      status = "DELIVERED";
+    } else if (events[0]?.status === "OUT_FOR_DELIVERY" && status === "IN_TRANSIT") {
+      status = "OUT_FOR_DELIVERY";
+    }
+
+    return {
+      found: true,
+      carrierCode: slug,
+      carrierName: carrierDisplayName(slug),
+      status,
+      statusDetail: events[0]?.description || undefined,
+      delivered: status === "DELIVERED",
+      events,
+    };
+  } catch {
+    return {
+      found: false,
+      carrierCode: slug,
+      carrierName: carrierDisplayName(slug),
+      status: "PENDING",
+      delivered: false,
+      events: [],
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2D. Direct Keyless USPS Tracking Scraper Fallback
+// ---------------------------------------------------------------------------
+/* eslint-enable @typescript-eslint/no-explicit-any */
 async function fetchUspsKeyless(trackingNumber: string): Promise<NormalizedResult> {
   const tn = trackingNumber.replace(/\s+/g, "");
   try {
@@ -544,18 +907,38 @@ async function fetchUspsKeyless(trackingNumber: string): Promise<NormalizedResul
 }
 
 // ---------------------------------------------------------------------------
-// 3. Keyless Carrier Orchestrator (Pkge + USPS + Cainiao fallback)
+// 3. Keyless Carrier Orchestrator (DHL eCS/USPS + Ship24 + PackageRadar + Pkge + USPS + Cainiao)
 // ---------------------------------------------------------------------------
 async function fetchKeylessCarrier(trackingNumber: string, carrierHint?: string | null): Promise<NormalizedResult> {
   const slug = detectCarrier(trackingNumber, carrierHint);
 
-  // Primary: universal keyless tracker via Pkge (supports UPS, FedEx, USPS, DHL, etc.)
+  // 1. Fast JSON check for USPS Ground Advantage / Shipping Partner / DHL eCommerce (926129..., 927489..., 936128..., 420...)
+  if (slug === "usps" || slug === "dhl" || slug === "other") {
+    const dhlEcs = await fetchDhlEcommerceKeyless(trackingNumber, slug);
+    if (dhlEcs.found && dhlEcs.events.length > 0) {
+      return dhlEcs;
+    }
+  }
+
+  // 2. Fast JSON check via Ship24 universal API (FedEx, UPS, USPS, DHL, YunExpress, etc.)
+  const ship24 = await fetchShip24Keyless(trackingNumber, slug);
+  if (ship24.found && ship24.events.length > 0) {
+    return ship24;
+  }
+
+  // 3. Fast SSR check via PackageRadar (UPS, USPS, FedEx, DHL)
+  const pkgRadar = await fetchPackageRadarKeyless(trackingNumber, slug);
+  if (pkgRadar.found && pkgRadar.events.length > 0) {
+    return pkgRadar;
+  }
+
+  // 4. Universal keyless tracker via Pkge (supports UPS, FedEx, USPS, DHL, etc. with live polling)
   const pkgeResult = await fetchPkgeKeyless(trackingNumber, slug);
   if (pkgeResult.found && pkgeResult.events.length > 0) {
     return pkgeResult;
   }
 
-  // Fallback A: direct USPS scraper if USPS number
+  // 5. Direct USPS scraper fallback if USPS number
   if (slug === "usps") {
     const uspsDirect = await fetchUspsKeyless(trackingNumber);
     if (uspsDirect.found && uspsDirect.events.length > 0) {
@@ -563,7 +946,7 @@ async function fetchKeylessCarrier(trackingNumber: string, carrierHint?: string 
     }
   }
 
-  // Fallback B: Cainiao Global network (often indexes cross-border USPS/UPS/FedEx handoff numbers)
+  // 6. Cainiao Global network (often indexes cross-border USPS/UPS/FedEx handoff numbers)
   try {
     const cn = await cainiaoProvider.fetch(trackingNumber);
     if (cn.found && cn.events.length > 0) {
