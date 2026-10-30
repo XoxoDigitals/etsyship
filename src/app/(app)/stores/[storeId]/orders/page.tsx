@@ -29,7 +29,7 @@ export default async function OrdersPage({ params }: { params: Promise<{ storeId
       take: PAGE_SIZE,
       include: {
         items: true,
-        shipments: { select: { kind: true, status: true, delivered: true } },
+        shipments: { orderBy: { createdAt: "desc" }, select: { kind: true, status: true, delivered: true } },
         _count: { select: { shipments: true } },
       },
     }),

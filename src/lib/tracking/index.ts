@@ -145,24 +145,72 @@ export async function syncShipment(shipmentId: string): Promise<SyncOutcome> {
     },
   });
 
-  // Mark order as DELIVERED when either SUPPLIER or CUSTOMER tracking is delivered.
-  if (delivered && (shipment.kind === "CUSTOMER" || shipment.kind === "SUPPLIER")) {
-    const res = await prisma.order
-      .updateMany({
-        where: { id: shipment.orderId, status: { in: ["NEW", "PROCESSING", "SHIPPED"] } },
-        data: { status: "DELIVERED" },
-      })
-      .catch(() => ({ count: 0 }));
-    if (res.count > 0) {
-      await orderEvent(
-        shipment.orderId,
-        "STATUS_CHANGE",
-        `Status → DELIVERED (${shipment.kind.toLowerCase()} tracking delivered)`
-      ).catch(() => void 0);
+  await recomputeOrderStatusFromShipments(shipment.orderId);
+
+  return { ok: true, newEvents, status: result.status, delivered };
+}
+
+/**
+ * Recompute an order's status based on its shipments (prioritizing SUPPLIER tracking when present,
+ * otherwise CUSTOMER tracking). If a new undelivered supplier tracking is added or an existing one
+ * changes from DELIVERED to OUT_FOR_DELIVERY / IN_TRANSIT, the order transitions back to SHIPPED
+ * until all supplier trackings are DELIVERED.
+ */
+export async function recomputeOrderStatusFromShipments(orderId: string): Promise<string | null> {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    select: {
+      id: true,
+      status: true,
+      shipments: {
+        orderBy: { createdAt: "desc" },
+        select: { id: true, kind: true, status: true, delivered: true },
+      },
+    },
+  });
+  if (!order) return null;
+  if (order.status === "CANCELLED" || order.status === "REFUNDED") {
+    return order.status;
+  }
+
+  const supplier = order.shipments.filter((s) => s.kind === "SUPPLIER");
+  const customer = order.shipments.filter((s) => s.kind === "CUSTOMER");
+  const pool = supplier.length > 0 ? supplier : customer;
+  if (pool.length === 0) return order.status;
+
+  const allDelivered = pool.every((s) => s.delivered || s.status === "DELIVERED");
+  let nextStatus: "NEW" | "PROCESSING" | "SHIPPED" | "DELIVERED" = order.status;
+
+  if (allDelivered) {
+    nextStatus = "DELIVERED";
+  } else {
+    // At least one shipment in the active pool is not yet delivered
+    const hasActiveMovement = pool.some((s) =>
+      ["INFO_RECEIVED", "IN_TRANSIT", "OUT_FOR_DELIVERY", "EXCEPTION", "DELIVERED"].includes(s.status)
+    );
+    if (order.status === "DELIVERED" || hasActiveMovement || customer.length > 0) {
+      nextStatus = "SHIPPED";
+    } else if (order.status === "NEW" && supplier.length > 0) {
+      nextStatus = "PROCESSING";
     }
   }
 
-  return { ok: true, newEvents, status: result.status, delivered };
+  if (nextStatus !== order.status) {
+    await prisma.order
+      .update({
+        where: { id: orderId },
+        data: { status: nextStatus },
+      })
+      .catch(() => null);
+    const kindLabel = supplier.length > 0 ? "supplier" : "buyer";
+    await orderEvent(
+      orderId,
+      "STATUS_CHANGE",
+      `Status → ${nextStatus} (based on ${kindLabel} tracking)`
+    ).catch(() => void 0);
+  }
+
+  return nextStatus;
 }
 
 /** Sync all shipments that are due (not delivered and nextSyncAt <= now). Used by the worker. */

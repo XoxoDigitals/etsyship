@@ -692,7 +692,6 @@ export function OrderDetail({
         onShipmentUpdated={(s) => {
           setOrder((o) => ({
             ...o,
-            status: s.delivered && ["NEW", "PROCESSING", "SHIPPED"].includes(o.status) ? "DELIVERED" : o.status,
             shipments: o.shipments.map((x) => (x.id === s.id ? s : x)),
           }));
         }}
@@ -1394,9 +1393,7 @@ function ShipmentCard({
         body: JSON.stringify({ status }),
       });
       onShipmentUpdated(out.shipment);
-      if (out.shipment.delivered) {
-        await onChanged();
-      }
+      await onChanged();
       setMsg(`Marked ${status.replace(/_/g, " ").toLowerCase()}`);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Update failed");
@@ -1415,9 +1412,7 @@ function ShipmentCard({
         { method: "POST" }
       );
       onShipmentUpdated(out.shipment);
-      if (out.shipment.delivered) {
-        await onChanged();
-      }
+      await onChanged();
       setMsg(
         out.outcome.ok
           ? `${out.outcome.newEvents} new event${out.outcome.newEvents === 1 ? "" : "s"}`

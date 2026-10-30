@@ -27,6 +27,18 @@ export interface OrdersInitial {
 
 const STATUSES = ["NEW", "PROCESSING", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"];
 
+const TRACKING_FILTER_OPTIONS = [
+  { value: "", label: "All" },
+  { value: "NO_TRACKING", label: "No tracking" },
+  { value: "HAS_TRACKING", label: "Has tracking" },
+  { value: "PENDING", label: "Pending" },
+  { value: "INFO_RECEIVED", label: "Info received" },
+  { value: "IN_TRANSIT", label: "In transit" },
+  { value: "OUT_FOR_DELIVERY", label: "Out for delivery" },
+  { value: "DELIVERED", label: "Delivered" },
+  { value: "EXCEPTION", label: "Exception" },
+];
+
 function itemsSummary(items: OrderRow["items"]): string {
   if (!items.length) return "—";
   const first = items[0];
@@ -40,28 +52,30 @@ function shipmentStatusByKind(o: OrderRow, kind: "SUPPLIER" | "CUSTOMER") {
   const pool = o.shipments.filter((s) => s.kind === kind);
   if (!pool.length) return <span className="text-xs text-slate-400">No tracking</span>;
 
-  const priority = [
-    "DELIVERED",
+  // Only show DELIVERED when ALL shipments of this kind are delivered.
+  if (pool.every((s) => s.delivered || s.status === "DELIVERED")) {
+    return <Badge status="DELIVERED" />;
+  }
+
+  // Prefer the newest undelivered shipment (pool is ordered newest-first).
+  const undelivered = pool.filter((s) => !s.delivered && s.status !== "DELIVERED");
+  const activePriority = [
     "OUT_FOR_DELIVERY",
     "IN_TRANSIT",
-    "INFO_RECEIVED",
     "EXCEPTION",
+    "INFO_RECEIVED",
     "PENDING",
     "EXPIRED",
     "UNKNOWN",
   ];
 
-  if (pool.some((s) => s.delivered)) {
-    return <Badge status="DELIVERED" />;
-  }
-
-  for (const st of priority) {
-    if (pool.some((s) => s.status === st)) {
+  for (const st of activePriority) {
+    if (undelivered.some((s) => s.status === st)) {
       return <Badge status={st} />;
     }
   }
 
-  return <Badge status={pool[0].status || "PENDING"} />;
+  return <Badge status={undelivered[0]?.status || pool[0].status || "PENDING"} />;
 }
 
 export function OrdersClient({
@@ -75,6 +89,8 @@ export function OrdersClient({
 }) {
   const [data, setData] = useState<OrdersInitial>(initial);
   const [status, setStatus] = useState("");
+  const [supplierTracking, setSupplierTracking] = useState("");
+  const [buyerTracking, setBuyerTracking] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [page, setPage] = useState(1);
@@ -91,7 +107,7 @@ export function OrdersClient({
   // Reset to page 1 when filters change.
   useEffect(() => {
     setPage(1);
-  }, [status, debouncedQ]);
+  }, [status, supplierTracking, buyerTracking, debouncedQ]);
 
   useEffect(() => {
     if (first.current) {
@@ -104,6 +120,8 @@ export function OrdersClient({
       setError(null);
       const params = new URLSearchParams({ storeId, page: String(page), pageSize: String(initial.pageSize) });
       if (status) params.set("status", status);
+      if (supplierTracking) params.set("supplierTracking", supplierTracking);
+      if (buyerTracking) params.set("buyerTracking", buyerTracking);
       if (debouncedQ) params.set("q", debouncedQ);
       try {
         const res = await fetch(`/api/orders?${params.toString()}`);
@@ -121,53 +139,16 @@ export function OrdersClient({
     return () => {
       cancelled = true;
     };
-  }, [storeId, status, debouncedQ, page, initial.pageSize]);
+  }, [storeId, status, supplierTracking, buyerTracking, debouncedQ, page, initial.pageSize]);
 
   const totalPages = Math.max(1, Math.ceil(data.total / data.pageSize));
 
-  async function refundOrder(id: string, orderNumber: string) {
-    if (!window.confirm(`Mark order "${orderNumber}" as REFUNDED?`)) return;
-    setError(null);
-    try {
-      const res = await fetch(`/api/orders/${id}/status`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status: "REFUNDED" }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || "Failed to refund order");
-      setData((prev) => ({
-        ...prev,
-        items: prev.items.map((o) => (o.id === id ? { ...o, status: "REFUNDED" } : o)),
-      }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to refund order");
-    }
-  }
-
-  async function deleteOrder(id: string, orderNumber: string) {
-    if (!window.confirm(`Permanently delete order "${orderNumber}"?`)) return;
-    setError(null);
-    try {
-      const res = await fetch(`/api/orders/${id}`, { method: "DELETE" });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || "Failed to delete order");
-      setData((prev) => ({
-        ...prev,
-        total: Math.max(0, prev.total - 1),
-        items: prev.items.filter((o) => o.id !== id),
-      }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to delete order");
-    }
-  }
-
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <div className="sm:w-48">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+        <div className="sm:w-44">
           <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">All statuses</option>
+            <option value="">All order statuses</option>
             {STATUSES.map((s) => (
               <option key={s} value={s}>
                 {s}
@@ -175,7 +156,25 @@ export function OrdersClient({
             ))}
           </Select>
         </div>
-        <div className="flex-1">
+        <div className="sm:w-52">
+          <Select value={supplierTracking} onChange={(e) => setSupplierTracking(e.target.value)}>
+            {TRACKING_FILTER_OPTIONS.map((opt) => (
+              <option key={`sup-${opt.value}`} value={opt.value}>
+                Supplier tracking: {opt.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="sm:w-52">
+          <Select value={buyerTracking} onChange={(e) => setBuyerTracking(e.target.value)}>
+            {TRACKING_FILTER_OPTIONS.map((opt) => (
+              <option key={`buy-${opt.value}`} value={opt.value}>
+                Buyer tracking: {opt.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="min-w-[220px] flex-1">
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -189,7 +188,11 @@ export function OrdersClient({
       {data.items.length === 0 && !loading ? (
         <EmptyState
           title="No orders found"
-          desc={status || debouncedQ ? "Try changing the filters." : "Create your first order to start tracking."}
+          desc={
+            status || supplierTracking || buyerTracking || debouncedQ
+              ? "Try changing the filters."
+              : "Create your first order to start tracking."
+          }
           action={
             <Link href={`/stores/${storeId}/orders/new`}>
               <Button>+ Create order</Button>
@@ -210,7 +213,6 @@ export function OrdersClient({
                   <th className="px-6 py-3 text-right">Revenue</th>
                   <th className="px-6 py-3">Supplier Tracking</th>
                   <th className="px-6 py-3">Buyer Tracking</th>
-                  <th className="px-6 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -234,34 +236,6 @@ export function OrdersClient({
                     </td>
                     <td className="px-6 py-3.5">{shipmentStatusByKind(o, "SUPPLIER")}</td>
                     <td className="px-6 py-3.5">{shipmentStatusByKind(o, "CUSTOMER")}</td>
-                    <td className="whitespace-nowrap px-6 py-3.5 text-right">
-                      <div className="flex justify-end gap-1.5">
-                        <Link
-                          href={`/stores/${storeId}/orders/${o.id}`}
-                          className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
-                        >
-                          View / Edit
-                        </Link>
-                        {o.status !== "REFUNDED" && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-amber-700 hover:bg-amber-50 hover:text-amber-800"
-                            onClick={() => refundOrder(o.id, o.orderNumber)}
-                          >
-                            Refund
-                          </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
-                          onClick={() => deleteOrder(o.id, o.orderNumber)}
-                        >
-                          Delete
-                        </Button>
-                      </div>
-                    </td>
                   </tr>
                 ))}
               </tbody>

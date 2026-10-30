@@ -102,7 +102,7 @@ export const POST = handle(async (req: Request, { params }: { params: Promise<{ 
     };
   }
 
-  if (input.markProcessing && order.status === "NEW") {
+  if (input.markProcessing && !tracking && order.status === "NEW") {
     await prisma.order.update({ where: { id: order.id }, data: { status: "PROCESSING" } });
     await orderEvent(order.id, "STATUS_CHANGE", "Status → PROCESSING");
   }

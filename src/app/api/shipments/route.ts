@@ -3,7 +3,7 @@ import { ok, handle, parseJson } from "@/lib/api";
 import { requireUserId, assertOrderOwner } from "@/lib/session";
 import { shipmentSchema } from "@/lib/validation";
 import { audit, orderEvent } from "@/lib/audit";
-import { syncShipment, deepLinkFor, detectCarrier } from "@/lib/tracking";
+import { syncShipment, recomputeOrderStatusFromShipments, deepLinkFor, detectCarrier } from "@/lib/tracking";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +37,7 @@ export const POST = handle(async (req: Request) => {
   }
 
   await syncShipment(shipment.id);
+  await recomputeOrderStatusFromShipments(order.id);
 
   await orderEvent(order.id, "TRACKING_ADDED", `${body.kind} tracking ${trackingNumber}`);
   await audit({ userId, action: "CREATE", entity: "Shipment", entityId: shipment.id, meta: { orderId: order.id } });

@@ -31,6 +31,9 @@ export function UsersClient({
   const [users, setUsers] = useState<UserRow[]>(initialUsers);
   const [adding, setAdding] = useState(false);
 
+  const currentUser = users.find((u) => u.id === currentUserId);
+  const isSuperAdmin = Boolean(currentUser?.email?.toLowerCase().trim().startsWith("saboor@xoxo"));
+
   // Add user form state
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -243,7 +246,10 @@ export function UsersClient({
               <tbody className="divide-y divide-slate-100">
                 {users.map((u) => {
                   const isSelf = u.id === currentUserId;
-                  const isEditing = editingId === u.id;
+                  const isTargetSuperAdmin = u.email.toLowerCase().trim().startsWith("saboor@xoxo");
+                  const canEdit = isSuperAdmin || isSelf;
+                  const canDelete = isSuperAdmin && !isSelf && !isTargetSuperAdmin;
+                  const isEditing = editingId === u.id && canEdit;
                   return (
                     <tr key={u.id} className="align-top transition hover:bg-slate-50/80">
                       <td className="px-6 py-4">
@@ -315,17 +321,21 @@ export function UsersClient({
                               </Button>
                             </div>
                           </form>
-                        ) : (
+                        ) : canEdit || canDelete ? (
                           <div className="inline-flex items-center gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => startEdit(u)}>
-                              Edit
-                            </Button>
-                            {!isSelf && (
+                            {canEdit && (
+                              <Button variant="ghost" size="sm" onClick={() => startEdit(u)}>
+                                Edit
+                              </Button>
+                            )}
+                            {canDelete && (
                               <Button variant="ghost" size="sm" onClick={() => onDelete(u)}>
                                 Delete
                               </Button>
                             )}
                           </div>
+                        ) : (
+                          <span className="text-xs text-slate-400">—</span>
                         )}
                       </td>
                     </tr>

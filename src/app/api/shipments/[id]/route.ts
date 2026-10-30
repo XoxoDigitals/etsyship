@@ -4,7 +4,7 @@ import { ok, fail, handle, parseJson } from "@/lib/api";
 import { requireUserId, assertOrderOwner } from "@/lib/session";
 import { audit, orderEvent } from "@/lib/audit";
 import { shipmentStatusUpdateSchema } from "@/lib/validation";
-import { deepLinkFor, detectCarrier, CARRIER_NAMES } from "@/lib/tracking";
+import { deepLinkFor, detectCarrier, recomputeOrderStatusFromShipments, CARRIER_NAMES } from "@/lib/tracking";
 
 export const dynamic = "force-dynamic";
 
@@ -59,22 +59,8 @@ export const PATCH = handle(async (req: Request, { params }: { params: Promise<{
     },
   });
 
-  // Delivered supplier or customer parcel marks the order as DELIVERED.
-  if (delivered && (existing.kind === "CUSTOMER" || existing.kind === "SUPPLIER")) {
-    const res = await prisma.order
-      .updateMany({
-        where: { id: existing.orderId, status: { in: ["NEW", "PROCESSING", "SHIPPED"] } },
-        data: { status: "DELIVERED" },
-      })
-      .catch(() => ({ count: 0 }));
-    if (res.count > 0) {
-      await orderEvent(
-        existing.orderId,
-        "STATUS_CHANGE",
-        `Status → DELIVERED (${existing.kind.toLowerCase()} tracking delivered)`
-      ).catch(() => void 0);
-    }
-  }
+  // Recompute order status based on all supplier/customer shipments.
+  await recomputeOrderStatusFromShipments(existing.orderId);
 
   await orderEvent(existing.orderId, "TRACKING_UPDATE", `${existing.kind} ${existing.trackingNumber} → ${label}`);
   await audit({
@@ -124,6 +110,7 @@ export const DELETE = handle(async (_req: Request, { params }: { params: Promise
   await assertOrderOwner(shipment.orderId, userId);
 
   await prisma.shipment.delete({ where: { id: shipment.id } }); // events cascade
+  await recomputeOrderStatusFromShipments(shipment.orderId);
   await audit({
     userId,
     action: "DELETE",

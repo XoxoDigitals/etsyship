@@ -1,8 +1,8 @@
-import type { Prisma } from "@prisma/client";
+import type { Prisma, ShipmentStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ok, fail, handle, parseJson } from "@/lib/api";
 import { requireUserId, assertStoreOwner } from "@/lib/session";
-import { orderSchema, orderStatusEnum } from "@/lib/validation";
+import { orderSchema, orderStatusEnum, shipmentStatusEnum } from "@/lib/validation";
 import { audit, orderEvent } from "@/lib/audit";
 import { genOrderNumber } from "@/lib/utils";
 import { money } from "@/lib/money";
@@ -18,9 +18,34 @@ export const GET = handle(async (req: Request) => {
   await assertStoreOwner(storeId, userId);
 
   const statusParam = url.searchParams.get("status");
+  const supplierTrackingParam = url.searchParams.get("supplierTracking")?.trim();
+  const buyerTrackingParam = url.searchParams.get("buyerTracking")?.trim();
   const q = url.searchParams.get("q")?.trim();
   const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get("pageSize")) || 20));
+
+  const andClauses: Prisma.OrderWhereInput[] = [];
+
+  function buildTrackingFilter(kind: "SUPPLIER" | "CUSTOMER", raw: string): Prisma.OrderWhereInput | null {
+    if (raw === "NO_TRACKING") {
+      return { shipments: { none: { kind } } };
+    }
+    if (raw === "HAS_TRACKING") {
+      return { shipments: { some: { kind } } };
+    }
+    const parsed = shipmentStatusEnum.safeParse(raw);
+    if (!parsed.success) return null;
+    const st: ShipmentStatus = parsed.data;
+    if (st === "DELIVERED") {
+      return {
+        AND: [
+          { shipments: { some: { kind, status: "DELIVERED" } } },
+          { shipments: { none: { kind, status: { not: "DELIVERED" } } } },
+        ],
+      };
+    }
+    return { shipments: { some: { kind, status: st } } };
+  }
 
   const where: Prisma.OrderWhereInput = { storeId, archived: false };
   if (statusParam) {
@@ -28,11 +53,26 @@ export const GET = handle(async (req: Request) => {
     if (!parsed.success) return fail("Invalid status", 400);
     where.status = parsed.data;
   }
+  if (supplierTrackingParam) {
+    const f = buildTrackingFilter("SUPPLIER", supplierTrackingParam);
+    if (!f) return fail("Invalid supplierTracking filter", 400);
+    andClauses.push(f);
+  }
+  if (buyerTrackingParam) {
+    const f = buildTrackingFilter("CUSTOMER", buyerTrackingParam);
+    if (!f) return fail("Invalid buyerTracking filter", 400);
+    andClauses.push(f);
+  }
   if (q) {
-    where.OR = [
-      { orderNumber: { contains: q, mode: "insensitive" } },
-      { customerName: { contains: q, mode: "insensitive" } },
-    ];
+    andClauses.push({
+      OR: [
+        { orderNumber: { contains: q, mode: "insensitive" } },
+        { customerName: { contains: q, mode: "insensitive" } },
+      ],
+    });
+  }
+  if (andClauses.length > 0) {
+    where.AND = andClauses;
   }
 
   const [total, rows] = await Promise.all([
@@ -44,7 +84,7 @@ export const GET = handle(async (req: Request) => {
       take: pageSize,
       include: {
         items: true,
-        shipments: { select: { kind: true, status: true, delivered: true } },
+        shipments: { orderBy: { createdAt: "desc" }, select: { kind: true, status: true, delivered: true } },
         _count: { select: { shipments: true } },
       },
     }),
